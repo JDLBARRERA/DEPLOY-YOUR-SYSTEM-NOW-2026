@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: paas
+      POSTGRES_PASSWORD: paas
+      POSTGRES_DB: paas
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - paas
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    depends_on:
+      - postgres
+    ports:
+      - "127.0.0.1:6543:6543"
+    volumes:
+      - ./infra/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./infra/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    networks:
+      - paas
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - paas
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:2019:2019"
+    volumes:
+      - ./infra/caddy.json:/etc/caddy/caddy.json:ro
+    command: ["caddy", "run", "--config", "/etc/caddy/caddy.json"]
+    networks:
+      - paas
+
+networks:
+  paas:
+    name: paas
+
+volumes:
+  postgres_data:

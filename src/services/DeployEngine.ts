@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import os from "node:os";
@@ -22,6 +22,31 @@ export class DeployValidationError extends Error {
 export interface DeployRequest {
   repoUrl: string;
   projectName: string;
+  projectId?: string;
+  image?: string;
+  branch?: string;
+  env?: Record<string, string>;
+  onLog?: (line: string) => void;
+}
+
+const GIT_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
+
+export function assertGitBranch(branch: string): void {
+  if (!GIT_BRANCH.test(branch) || branch.includes("..")) {
+    throw new DeployValidationError("branch is not a valid git ref");
+  }
+}
+
+export function deploymentImageName(
+  projectName: string,
+  branch: string,
+  preview: boolean,
+): string {
+  const source = preview ? `${branch}-${projectName}` : projectName;
+  const label = normalizeImageName(source)
+    .slice(0, 63)
+    .replace(/[._-]+$/, "");
+  return normalizeImageName(label);
 }
 
 export interface DeployResult {
@@ -29,6 +54,8 @@ export interface DeployResult {
   port: number;
   status: string;
   image: string;
+  containerId: string;
+  commitHash: string | null;
 }
 
 export function assertPublicGitHubRepo(repoUrl: string): void {
@@ -56,20 +83,59 @@ export function normalizeImageName(projectName: string): string {
   return normalized;
 }
 
-function runNixpacks(workDir: string, image: string): Promise<void> {
+function streamLines(
+  stream: NodeJS.ReadableStream,
+  onLog: (line: string) => void,
+): void {
+  let buffer = "";
+  stream.on("data", (chunk: Buffer | string) => {
+    buffer += chunk.toString();
+    const parts = buffer.split(/\r?\n/);
+    buffer = parts.pop() ?? "";
+    for (const line of parts) {
+      if (line.trim()) {
+        onLog(line);
+      }
+    }
+  });
+}
+
+function runNixpacks(
+  workDir: string,
+  image: string,
+  env: Record<string, string>,
+  onLog: (line: string) => void,
+): Promise<void> {
+  const args = ["build", workDir, "--name", image];
+  for (const [key, value] of Object.entries(env)) {
+    args.push("--env", `${key}=${value}`);
+  }
+
   return new Promise((resolve, reject) => {
-    execFile(
-      "nixpacks",
-      ["build", workDir, "--name", image],
-      { timeout: BUILD_TIMEOUT_MS, windowsHide: true },
-      (error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
+    const child = spawn("nixpacks", args, {
+      windowsHide: true,
+      shell: false,
+    });
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error("nixpacks build timed out"));
+    }, BUILD_TIMEOUT_MS);
+
+    streamLines(child.stdout, onLog);
+    streamLines(child.stderr, onLog);
+
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
         resolve();
-      },
-    );
+        return;
+      }
+      reject(new Error(`nixpacks exited with code ${code}`));
+    });
   });
 }
 
@@ -78,27 +144,61 @@ export class DeployEngine {
 
   async deploy(input: DeployRequest): Promise<DeployResult> {
     assertPublicGitHubRepo(input.repoUrl);
-    const image = normalizeImageName(input.projectName);
-    const projectId = randomBytes(8).toString("hex");
+    const image = normalizeImageName(input.image ?? input.projectName);
+    const projectId = input.projectId ?? randomBytes(8).toString("hex");
+    const onLog = input.onLog ?? (() => undefined);
+    const env = input.env ?? {};
     const workDir = path.join(os.tmpdir(), "builds", projectId);
+    let commitHash: string | null = null;
 
     await mkdir(workDir, { recursive: true });
 
     try {
-      await simpleGit().clone(input.repoUrl, workDir);
-      await runNixpacks(workDir, image);
+      if (input.branch) {
+        assertGitBranch(input.branch);
+      }
+      onLog(`Cloning ${input.repoUrl}${input.branch ? ` (${input.branch})` : ""}`);
+      const cloneOptions = input.branch
+        ? ["--branch", input.branch, "--single-branch"]
+        : undefined;
+      await simpleGit()
+        .outputHandler((_command, stdout, stderr) => {
+          streamLines(stdout, onLog);
+          streamLines(stderr, onLog);
+        })
+        .clone(input.repoUrl, workDir, cloneOptions);
+
+      commitHash = (await simpleGit(workDir).revparse(["HEAD"])).trim();
+      const envKeys = Object.keys(env);
+      if (envKeys.length > 0) {
+        onLog(`Injecting env ${envKeys.join(", ")}`);
+      }
+      onLog(`Building image ${image}`);
+      await runNixpacks(workDir, image, env, onLog);
     } finally {
       await rm(workDir, { recursive: true, force: true });
     }
 
+    onLog("Starting container");
+    const network = await this.deployNetwork();
     const container = await this.docker.createContainer({
+      name: `paas-${projectId}`,
       Image: image,
-      Env: [`PORT=${CONTAINER_PORT}`],
+      Labels: {
+        "paas.project": image,
+        "paas.projectId": projectId,
+        "paas.repo": input.repoUrl,
+      },
+      Env: [
+        `PORT=${CONTAINER_PORT}`,
+        ...Object.entries(env).map(([key, value]) => `${key}=${value}`),
+      ],
       ExposedPorts: { [`${CONTAINER_PORT}/tcp`]: {} },
       HostConfig: {
         PortBindings: {
           [`${CONTAINER_PORT}/tcp`]: [{ HostPort: "0" }],
         },
+        ...(network ? { NetworkMode: network } : {}),
       },
     });
 
@@ -111,11 +211,46 @@ export class DeployEngine {
       throw new Error("Docker did not assign a host port");
     }
 
+    onLog(`Container listening on host port ${port}`);
+
     return {
       projectId,
       port,
       status: info.State.Status,
       image,
+      containerId: info.Id,
+      commitHash,
     };
+  }
+
+  private async deployNetwork(): Promise<string | undefined> {
+    const name = process.env.DEPLOY_NETWORK ?? "paas";
+    try {
+      await this.docker.getNetwork(name).inspect();
+      return name;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async stopPrevious(image: string, currentContainerId: string): Promise<void> {
+    const existing = await this.docker.listContainers({
+      all: true,
+      filters: { label: [`paas.project=${image}`] },
+    });
+
+    for (const item of existing) {
+      if (item.Id === currentContainerId) {
+        continue;
+      }
+
+      const previous = this.docker.getContainer(item.Id);
+      try {
+        await previous.stop({ t: 5 });
+      } catch {
+        // The previous container may already be stopped.
+      }
+      await previous.remove({ force: true });
+    }
   }
 }

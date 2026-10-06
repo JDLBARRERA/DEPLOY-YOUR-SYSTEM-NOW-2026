@@ -1,13 +1,50 @@
 import "dotenv/config";
 import Fastify from "fastify";
+import cors from "@fastify/cors";
+import Docker from "dockerode";
+import { createDeployQueue } from "./queues/deployQueue.js";
+import { deploymentRoutes } from "./routes/deployments.js";
+import { databaseRoutes } from "./routes/databases.js";
 import { deployRoutes } from "./routes/deploy.js";
-import { DeployEngine } from "./services/DeployEngine.js";
+import { githubWebhookRoutes } from "./routes/githubWebhook.js";
+import { prisma } from "./db.js";
+import { DatabaseManagerService } from "./services/DatabaseManagerService.js";
+import { createRedis } from "./redis.js";
+import { DeploymentStore } from "./services/DeploymentStore.js";
+import { LogBus } from "./services/LogBus.js";
+
+await prisma.$connect();
+const databases = new DatabaseManagerService();
+await databases.ensurePoolerAuth();
 
 const port = Number(process.env.PORT ?? 3000);
+const redis = createRedis();
+const store = new DeploymentStore(redis);
+const logs = new LogBus(redis);
 
 const app = Fastify({ logger: true });
+const queue = createDeployQueue(redis);
 
-await deployRoutes(app, new DeployEngine());
+await app.register(cors, { origin: "http://localhost:3001" });
+await deployRoutes(app, {
+  queue,
+  store,
+  logs,
+});
+await app.register((scope) =>
+  githubWebhookRoutes(scope, {
+    queue,
+    store,
+    logs,
+    databases,
+  }),
+);
+await databaseRoutes(app, databases);
+await deploymentRoutes(app, {
+  store,
+  logs,
+  docker: new Docker(),
+});
 
 try {
   await app.listen({ port, host: "0.0.0.0" });
