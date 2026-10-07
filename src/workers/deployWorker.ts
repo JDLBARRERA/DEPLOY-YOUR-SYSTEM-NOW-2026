@@ -4,6 +4,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import type { Redis } from "ioredis";
 import { Worker } from "bullmq";
 import { appHost, appPublicUrl } from "../services/appHost.js";
 import { CaddyClient } from "../services/CaddyClient.js";
@@ -21,7 +22,10 @@ const connection = createRedis();
 const store = new DeploymentStore(connection);
 const logs = new LogBus(connection);
 const caddy = new CaddyClient();
-const concurrency = Number(process.env.DEPLOY_CONCURRENCY ?? 2);
+const concurrency = Number(process.env.DEPLOY_CONCURRENCY ?? 5);
+
+const PORT_KEY_PREFIX = "deploy:port:";
+const PORT_TTL_SECONDS = 60 * 60 * 24;
 
 const DEFAULT_DOCKERFILE = `FROM node:18-alpine
 WORKDIR /app
@@ -37,9 +41,11 @@ const worker = new Worker<DeployJobData>(
   async (job) => {
     const { projectId, repoUrl, projectName, deploymentId } = job.data;
     const appName = dockerTag(job.data.image, projectName);
+    const containerName = `paas-${projectId}`;
     const lines: string[] = [];
     const repoDir = repoDirectory(job.id);
     let cloned = false;
+    let reservedPort: number | null = null;
 
     const note = async (message: string) => {
       console.log(message);
@@ -74,23 +80,29 @@ const worker = new Worker<DeployJobData>(
       execSync(`docker build -t "${appName}" .`, { cwd: repoDir, stdio: "pipe" });
 
       try {
-        execSync(`docker stop "${appName}"`, { stdio: "pipe" });
+        execSync(`docker stop "${containerName}"`, { stdio: "pipe" });
       } catch {
         // Contenedor previo inexistente.
       }
       try {
-        execSync(`docker rm "${appName}"`, { stdio: "pipe" });
+        execSync(`docker rm "${containerName}"`, { stdio: "pipe" });
       } catch {
         // Contenedor previo inexistente.
       }
 
+      const previous = await store.get(projectId);
+      if (previous?.port) {
+        await releasePort(connection, Number(previous.port));
+      }
+
       const containerPort = readContainerPort(dockerfilePath);
-      const puertoLibre = await findFreePort(8000);
+      const puertoLibre = await reserveFreePort(connection, 8000);
+      reservedPort = puertoLibre;
       const host = appHost(appName);
 
       await note(`Levantando contenedor en el puerto ${puertoLibre}...`);
       const containerId = execSync(
-        `docker run -d --name "${appName}" -p ${puertoLibre}:${containerPort} -e PORT=${containerPort} "${appName}"`,
+        `docker run -d --name "${containerName}" -p ${puertoLibre}:${containerPort} -e PORT=${containerPort} "${appName}"`,
         { stdio: "pipe" },
       )
         .toString()
@@ -112,7 +124,11 @@ const worker = new Worker<DeployJobData>(
         containerId,
         buildLogs: lines.join("\n"),
       });
+      reservedPort = null;
     } catch (error) {
+      if (reservedPort !== null) {
+        await releasePort(connection, reservedPort);
+      }
       const message = commandError(error);
       console.error(message);
       lines.push(message);
@@ -169,30 +185,44 @@ function readContainerPort(dockerfilePath: string): number {
   return 3000;
 }
 
-function findFreePort(from = 8000): Promise<number> {
+async function reserveFreePort(redis: Redis, from = 8000): Promise<number> {
   const max = from + 999;
-  const tryPort = (port: number): Promise<number> =>
-    new Promise((resolve, reject) => {
-      if (port > max) {
-        reject(new Error(`No hay puerto libre entre ${from} y ${max}`));
-        return;
-      }
-      const server = net.createServer();
-      server.unref();
-      server.once("error", () => {
-        void tryPort(port + 1).then(resolve, reject);
-      });
-      server.listen(port, "0.0.0.0", () => {
-        server.close((error) => {
-          if (error) {
-            void tryPort(port + 1).then(resolve, reject);
-            return;
-          }
-          resolve(port);
-        });
-      });
+  for (let port = from; port <= max; port++) {
+    const locked = await redis.set(
+      `${PORT_KEY_PREFIX}${port}`,
+      "1",
+      "EX",
+      PORT_TTL_SECONDS,
+      "NX",
+    );
+    if (locked !== "OK") {
+      continue;
+    }
+    if (!(await canBindPort(port))) {
+      await redis.del(`${PORT_KEY_PREFIX}${port}`);
+      continue;
+    }
+    return port;
+  }
+  throw new Error(`No hay puerto libre entre ${from} y ${max}`);
+}
+
+async function releasePort(redis: Redis, port: number): Promise<void> {
+  if (!Number.isInteger(port) || port <= 0) {
+    return;
+  }
+  await redis.del(`${PORT_KEY_PREFIX}${port}`);
+}
+
+function canBindPort(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", () => resolve(false));
+    server.listen(port, "0.0.0.0", () => {
+      server.close((error) => resolve(!error));
     });
-  return tryPort(from);
+  });
 }
 
 function commandError(error: unknown): string {
