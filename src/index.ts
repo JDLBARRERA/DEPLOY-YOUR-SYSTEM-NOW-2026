@@ -10,6 +10,7 @@ import { deployRoutes } from "./routes/deploy.js";
 import { githubWebhookRoutes } from "./routes/githubWebhook.js";
 import { prisma } from "./db.js";
 import { DatabaseManagerService } from "./services/DatabaseManagerService.js";
+import { ContainerDatabaseService } from "./services/ContainerDatabaseService.js";
 import { createRedis } from "./redis.js";
 import { DeploymentStore } from "./services/DeploymentStore.js";
 import { LogBus } from "./services/LogBus.js";
@@ -22,6 +23,7 @@ const port = Number(process.env.PORT ?? 3000);
 const redis = createRedis();
 const store = new DeploymentStore(redis);
 const logs = new LogBus(redis);
+const containerDatabases = new ContainerDatabaseService(redis);
 
 const app = Fastify({ logger: true });
 const queue = createDeployQueue(redis);
@@ -42,7 +44,7 @@ await app.register((scope) =>
     databases,
   }),
 );
-await databaseRoutes(app, databases);
+await databaseRoutes(app, databases, containerDatabases);
 await deploymentRoutes(app, {
   store,
   logs,

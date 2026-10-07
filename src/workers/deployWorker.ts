@@ -14,6 +14,8 @@ import {
   assertGitBranch,
   assertGitCommit,
   assertPublicGitHubRepo,
+  deployResourceLimits,
+  githubCloneUrl,
   normalizeImageName,
 } from "../services/DeployEngine.js";
 import { DEPLOY_QUEUE_NAME, type DeployJobData } from "../queues/deployQueue.js";
@@ -89,7 +91,8 @@ const worker = new Worker<DeployJobData>(
       fs.mkdirSync(repoDir, { recursive: true });
 
       await note(`Clonando repositorio (rama ${branch})...`);
-      execSync(`git clone -b "${branch}" --single-branch "${repoUrl}" .`, {
+      const cloneUrl = githubCloneUrl(repoUrl);
+      execSync(`git clone -b "${branch}" --single-branch "${cloneUrl}" .`, {
         cwd: repoDir,
         stdio: "pipe",
       });
@@ -186,14 +189,15 @@ const worker = new Worker<DeployJobData>(
       runtimeEnv.NODE_ENV = "production";
       const envFlags = dockerEnvFlags(runtimeEnv);
 
+      const limits = deployResourceLimits();
       await note(
-        `Levantando contenedor ${containerName} en red ${deployNetwork} (sin -p; upstream ${upstream})...`,
+        `Levantando contenedor ${containerName} en red ${deployNetwork} (sin -p; upstream ${upstream}; ${limits.memory} / ${limits.cpus} CPU)...`,
       );
       await note(
         `Inyectando env: ${Object.keys(runtimeEnv).sort().join(", ")}`,
       );
       const containerId = execSync(
-        `docker run -d --name "${containerName}" --network "${deployNetwork}" ${envFlags} "${appName}"`,
+        `docker run -d --name "${containerName}" --network "${deployNetwork}" --memory=${limits.memory} --memory-swap=${limits.memory} --cpus=${limits.cpus} ${envFlags} "${appName}"`,
         { stdio: "pipe" },
       )
         .toString()

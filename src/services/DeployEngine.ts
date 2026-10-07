@@ -71,9 +71,54 @@ export interface DeployResult {
 export function assertPublicGitHubRepo(repoUrl: string): void {
   if (!GITHUB_REPO_URL.test(repoUrl)) {
     throw new DeployValidationError(
-      "repoUrl must be an HTTPS URL of a public GitHub repository",
+      "repoUrl must be an HTTPS URL of a GitHub repository",
     );
   }
+}
+
+/**
+ * Inyecta GITHUB_PAT para clonar repos privados.
+ * Si la URL ya trae credenciales (@github.com) o no hay PAT, deja el fallback HTTPS.
+ * No registrar el resultado en logs (contiene el token).
+ */
+export function githubCloneUrl(repoUrl: string): string {
+  assertPublicGitHubRepo(repoUrl);
+  if (/^https:\/\/[^/\s]+@github\.com\//i.test(repoUrl)) {
+    return repoUrl;
+  }
+  const pat = process.env.GITHUB_PAT?.trim();
+  if (!pat) {
+    return repoUrl;
+  }
+  return repoUrl.replace(
+    /^https:\/\/github\.com\//i,
+    `https://${encodeURIComponent(pat)}@github.com/`,
+  );
+}
+
+export function deployResourceLimits(): { memory: string; cpus: string } {
+  return {
+    memory: process.env.DEPLOY_MEMORY?.trim() || "512m",
+    cpus: process.env.DEPLOY_CPUS?.trim() || "0.5",
+  };
+}
+
+export function parseMemoryBytes(value: string): number {
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(b|k|kb|m|mb|g|gb)?$/i);
+  if (!match) {
+    return 512 * 1024 * 1024;
+  }
+  const amount = Number(match[1]);
+  const unit = (match[2] ?? "b").toLowerCase();
+  const factor =
+    unit === "g" || unit === "gb"
+      ? 1024 ** 3
+      : unit === "m" || unit === "mb"
+        ? 1024 ** 2
+        : unit === "k" || unit === "kb"
+          ? 1024
+          : 1;
+  return Math.round(amount * factor);
 }
 
 export function normalizeImageName(projectName: string): string {
@@ -179,7 +224,7 @@ export class DeployEngine {
           streamLines(stdout, onLog);
           streamLines(stderr, onLog);
         })
-        .clone(input.repoUrl, workDir, cloneOptions);
+        .clone(githubCloneUrl(input.repoUrl), workDir, cloneOptions);
 
       commitHash = (await simpleGit(workDir).revparse(["HEAD"])).trim();
       const envKeys = Object.keys(env);
@@ -194,6 +239,8 @@ export class DeployEngine {
 
     onLog("Starting container");
     const network = await this.deployNetwork();
+    const limits = deployResourceLimits();
+    const nanoCpus = Math.round(Number(limits.cpus) * 1e9);
     const container = await this.docker.createContainer({
       name: `paas-${projectId}`,
       Image: image,
@@ -211,6 +258,9 @@ export class DeployEngine {
         PortBindings: {
           [`${CONTAINER_PORT}/tcp`]: [{ HostPort: "0" }],
         },
+        Memory: parseMemoryBytes(limits.memory),
+        MemorySwap: parseMemoryBytes(limits.memory),
+        NanoCpus: Number.isFinite(nanoCpus) && nanoCpus > 0 ? nanoCpus : 5e8,
         ...(network ? { NetworkMode: network } : {}),
       },
     });

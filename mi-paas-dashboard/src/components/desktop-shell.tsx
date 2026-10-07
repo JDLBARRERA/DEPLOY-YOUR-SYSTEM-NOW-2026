@@ -115,6 +115,17 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
         >
           {title}
         </Link>
+        <button
+          type="button"
+          className="rounded-md border border-white/40 bg-gradient-to-b from-white/35 to-white/10 px-3 py-1.5 text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.5)] hover:from-white/50"
+          onClick={() => {
+            void fetch("/api/logout", { method: "POST", credentials: "include" }).then(() => {
+              window.location.href = "/login";
+            });
+          }}
+        >
+          Salir
+        </button>
         <div className="ml-auto pr-2">
           <Clock />
         </div>

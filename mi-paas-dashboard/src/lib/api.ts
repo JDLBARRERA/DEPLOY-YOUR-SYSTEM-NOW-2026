@@ -10,12 +10,19 @@ export interface Deployment {
   createdAt: string;
 }
 
+export type DatabaseEngine = "postgres" | "mysql" | "redis";
+
 export interface Database {
   id: string;
   name: string;
+  type?: DatabaseEngine | string;
+  status?: string;
   dbName: string;
+  dbUser?: string;
   pooledUrl: string;
   directUrl: string;
+  databaseUrl?: string;
+  DATABASE_URL?: string;
   host: string;
   port: number;
   projectId?: string | null;
@@ -33,6 +40,7 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const res = await fetch(`/backend${endpoint}`, {
     ...options,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...options?.headers,

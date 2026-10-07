@@ -18,6 +18,22 @@ export default function SettingsPage() {
           <dt className="text-slate-600">API_URL</dt>
           <dd className="font-mono">{apiUrl}</dd>
         </div>
+        <div>
+          <dt className="text-slate-600">Auth</dt>
+          <dd>
+            Login valida <code className="font-mono">ADMIN_PASSWORD</code> (cookie{" "}
+            <code className="font-mono">dn_session</code>) o header{" "}
+            <code className="font-mono">x-api-key</code>.
+          </dd>
+        </div>
+        <div>
+          <dt className="text-slate-600">Repos privados</dt>
+          <dd>
+            <code className="font-mono">GITHUB_PAT</code> debe estar en el{" "}
+            <code className="font-mono">.env</code> del motor (API/worker), no solo en el
+            dashboard.
+          </dd>
+        </div>
       </dl>
     </AeroWindow>
   );

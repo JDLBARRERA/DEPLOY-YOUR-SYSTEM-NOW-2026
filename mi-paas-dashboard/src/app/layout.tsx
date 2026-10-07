@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { DesktopShell } from "@/components/desktop-shell";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
@@ -19,7 +18,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         className="min-h-full antialiased"
         style={{ fontFamily: '"Segoe UI", Tahoma, sans-serif' }}
       >
-        <DesktopShell>{children}</DesktopShell>
+        {children}
         <Toaster />
       </body>
     </html>
