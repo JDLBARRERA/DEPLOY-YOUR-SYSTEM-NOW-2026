@@ -1,5 +1,11 @@
 const DEFAULT_ADMIN_URL = "http://localhost:2019";
 
+const CADDY_HEADERS = {
+  Host: "localhost:2019",
+  Origin: "http://localhost:2019",
+  "Content-Type": "application/json",
+} as const;
+
 export class CaddyClient {
   private readonly adminUrl: string;
 
@@ -20,15 +26,9 @@ export class CaddyClient {
       terminal: true,
     };
 
-    const headers = {
-      "Content-Type": "application/json",
-      Host: "localhost:2019",
-      Origin: "http://localhost:2019",
-    };
-
     const replace = await fetch(`${this.adminUrl}/id/route-${projectId}`, {
       method: "PATCH",
-      headers,
+      headers: { ...CADDY_HEADERS },
       body: JSON.stringify(route),
     });
 
@@ -49,7 +49,7 @@ export class CaddyClient {
       `${this.adminUrl}/config/apps/http/servers/paas/routes/0`,
       {
         method: "POST",
-        headers,
+        headers: { ...CADDY_HEADERS },
         body: JSON.stringify(route),
       },
     );
@@ -67,5 +67,9 @@ export class CaddyClient {
 }
 
 function normalizeAdminUrl(url: string): string {
-  return url.trim().replace(/127\.0\.0\.1/g, "localhost") || DEFAULT_ADMIN_URL;
+  const normalized = url.trim().replace(/127\.0\.0\.1/g, "localhost");
+  if (!normalized || !normalized.startsWith("http://localhost:2019")) {
+    return DEFAULT_ADMIN_URL;
+  }
+  return normalized.replace(/\/+$/, "") || DEFAULT_ADMIN_URL;
 }
