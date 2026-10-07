@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Queue } from "bullmq";
 import type { DeployJobData } from "../queues/deployQueue.js";
 import type { DeploymentStore } from "./DeploymentStore.js";
+import { appHost } from "./appHost.js";
 import type { LogBus } from "./LogBus.js";
 
 export interface EnqueueDeployInput {
@@ -22,7 +23,7 @@ export async function enqueueDeployment(
   input: EnqueueDeployInput,
 ): Promise<{ projectId: string; jobId: string | undefined; host: string }> {
   const projectId = randomBytes(8).toString("hex");
-  const host = `${input.image}.localhost`;
+  const host = appHost(input.image);
 
   await deps.store.save({
     projectId,

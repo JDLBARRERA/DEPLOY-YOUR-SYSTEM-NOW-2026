@@ -1,0 +1,140 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: paas
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: paas
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - paas
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paas -d paas"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://paas:${POSTGRES_PASSWORD}@postgres:5432/paas
+    volumes:
+      - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    networks:
+      - paas
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - paas
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - api
+      - dashboard
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - paas
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    env_file:
+      - .env.prod
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://paas:${POSTGRES_PASSWORD}@postgres:5432/paas
+      REDIS_URL: redis://redis:6379
+      CADDY_ADMIN_URL: http://caddy:2019
+      APP_DOMAIN: ${DOMAIN}
+      CORS_ORIGIN: https://${DOMAIN}
+      DEPLOY_NETWORK: paas
+      PGBOUNCER_PASSWORD: ${PGBOUNCER_PASSWORD}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - paas
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    command: ["sh", "-c", "npx prisma migrate deploy && node dist/workers/deployWorker.js"]
+    env_file:
+      - .env.prod
+    environment:
+      DATABASE_URL: postgresql://paas:${POSTGRES_PASSWORD}@postgres:5432/paas
+      REDIS_URL: redis://redis:6379
+      CADDY_ADMIN_URL: http://caddy:2019
+      APP_DOMAIN: ${DOMAIN}
+      DEPLOY_NETWORK: paas
+      PGBOUNCER_PASSWORD: ${PGBOUNCER_PASSWORD}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - paas
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.dashboard
+      args:
+        NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
+    env_file:
+      - .env.prod
+    environment:
+      AUTH_URL: https://${DOMAIN}
+      NEXTAUTH_URL: https://${DOMAIN}
+      AUTH_TRUST_HOST: "true"
+      NEXT_PUBLIC_API_URL: https://api.${DOMAIN}
+      DATABASE_URL: postgresql://paas:${POSTGRES_PASSWORD}@postgres:5432/paas
+    depends_on:
+      - api
+    networks:
+      - paas
+
+networks:
+  paas:
+    name: paas
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

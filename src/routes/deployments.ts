@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import Docker from "dockerode";
 import type { DeploymentRecord, DeploymentStore } from "../services/DeploymentStore.js";
+import { publicUrlForHost } from "../services/appHost.js";
 import type { LogBus } from "../services/LogBus.js";
 
 const CONTAINER_PORT = "3000";
@@ -21,7 +22,7 @@ function toResponse(record: DeploymentRecord) {
     port,
     status: record.status,
     host: record.host,
-    url: `http://${record.host}`,
+    url: publicUrlForHost(record.host),
     createdAt: record.createdAt,
   };
 }
@@ -71,12 +72,7 @@ export async function deploymentRoutes(
       }
 
       reply.hijack();
-      reply.raw.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        "Access-Control-Allow-Origin": "http://localhost:3001",
-      });
+      reply.raw.writeHead(200, sseHeaders());
 
       const send = (line: string) => {
         reply.raw.write(`data: ${JSON.stringify(line)}\n\n`);
@@ -166,7 +162,7 @@ function sseHeaders(): Record<string, string> {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
-    "Access-Control-Allow-Origin": "http://localhost:3001",
+    "Access-Control-Allow-Origin": process.env.CORS_ORIGIN ?? "http://localhost:3001",
   };
 }
 

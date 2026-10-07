@@ -7,6 +7,7 @@ import { LogBus } from "../services/LogBus.js";
 import { DEPLOY_QUEUE_NAME, type DeployJobData } from "../queues/deployQueue.js";
 import { createRedis } from "../redis.js";
 import { readEnvRecord, variablesForDeployment } from "../services/projectEnv.js";
+import { appHost, appPublicUrl } from "../services/appHost.js";
 import { syncDeployment } from "../services/syncDeployment.js";
 
 const connection = createRedis();
@@ -20,8 +21,8 @@ const worker = new Worker<DeployJobData>(
   DEPLOY_QUEUE_NAME,
   async (job) => {
     const { projectId, repoUrl, projectName, image, deploymentId, branch } = job.data;
-    const host = `${image}.localhost`;
-    const url = `http://${host}`;
+    const host = appHost(image);
+    const url = appPublicUrl(image);
     const buildLines: string[] = [];
 
     await store.update(projectId, { status: "building" });

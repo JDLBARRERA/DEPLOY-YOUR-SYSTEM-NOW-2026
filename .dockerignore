@@ -1,0 +1,10 @@
+.git
+node_modules
+apps/dashboard/node_modules
+apps/dashboard/.next
+dist
+src/generated
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.prod.example

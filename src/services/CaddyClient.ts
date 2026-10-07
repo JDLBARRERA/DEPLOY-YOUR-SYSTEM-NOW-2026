@@ -39,7 +39,7 @@ export class CaddyClient {
     }
 
     const created = await fetch(
-      `${this.adminUrl}/config/apps/http/servers/paas/routes`,
+      `${this.adminUrl}/config/apps/http/servers/paas/routes/0`,
       {
         method: "POST",
         headers,

@@ -1,4 +1,5 @@
 node_modules
 dist
 .env
+infra/.env.prod
 src/generated

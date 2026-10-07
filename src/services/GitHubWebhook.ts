@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Queue } from "bullmq";
 import { prisma } from "../db.js";
 import type { DeployJobData } from "../queues/deployQueue.js";
+import { appPublicUrl } from "./appHost.js";
 import { deploymentImageName } from "./DeployEngine.js";
 import type { DatabaseManagerService } from "./DatabaseManagerService.js";
 import type { DeploymentStore } from "./DeploymentStore.js";
@@ -154,7 +155,7 @@ export class GitHubWebhookService {
         }
       }
 
-      const url = `http://${image}.localhost`;
+      const url = appPublicUrl(image);
       const deployment = await prisma.deployment.create({
         data: {
           projectId: project.id,

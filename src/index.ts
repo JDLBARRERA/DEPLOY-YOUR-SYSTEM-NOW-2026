@@ -25,7 +25,9 @@ const logs = new LogBus(redis);
 const app = Fastify({ logger: true });
 const queue = createDeployQueue(redis);
 
-await app.register(cors, { origin: "http://localhost:3001" });
+await app.register(cors, {
+  origin: process.env.CORS_ORIGIN ?? "http://localhost:3001",
+});
 await deployRoutes(app, {
   queue,
   store,

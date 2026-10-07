@@ -1,0 +1,28 @@
+{
+	email {$ACME_EMAIL}
+	admin 0.0.0.0:2019 {
+		origins http://caddy:2019
+	}
+	on_demand_tls {
+		interval 2m
+		burst 5
+	}
+	servers :443 {
+		name paas
+	}
+}
+
+{$DOMAIN}, www.{$DOMAIN} {
+	reverse_proxy dashboard:3001
+}
+
+api.{$DOMAIN} {
+	reverse_proxy api:3000
+}
+
+*.{$DOMAIN} {
+	tls {
+		on_demand
+	}
+	respond "Not deployed" 404
+}
