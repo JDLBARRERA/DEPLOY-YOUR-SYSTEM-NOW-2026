@@ -37,10 +37,12 @@ COPY package*.json ./
 ENV NODE_ENV=development
 RUN npm install
 COPY . .
-# Generar el cliente de Prisma antes de compilar
+# 1. Generar cliente de Prisma
 RUN npx prisma generate
-# Compilar la aplicación
+# 2. Compilar TypeScript
 RUN npm run build
+# 3. Copiar la carpeta generada a dist/ para runtime
+RUN cp -r src/generated dist/ || true
 EXPOSE 8000
 CMD ["npm", "start"]
 `;
