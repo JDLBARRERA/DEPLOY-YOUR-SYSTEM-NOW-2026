@@ -1,9 +1,11 @@
-const DEFAULT_ADMIN_URL = "http://127.0.0.1:2019";
+const DEFAULT_ADMIN_URL = "http://localhost:2019";
 
 export class CaddyClient {
-  constructor(
-    private readonly adminUrl = process.env.CADDY_ADMIN_URL ?? DEFAULT_ADMIN_URL,
-  ) {}
+  private readonly adminUrl: string;
+
+  constructor(adminUrl = process.env.CADDY_ADMIN_URL ?? DEFAULT_ADMIN_URL) {
+    this.adminUrl = normalizeAdminUrl(adminUrl);
+  }
 
   async upsertRoute(projectId: string, host: string, port: number): Promise<void> {
     const route = {
@@ -20,8 +22,10 @@ export class CaddyClient {
 
     const headers = {
       "Content-Type": "application/json",
-      Origin: this.adminUrl,
+      Host: "localhost:2019",
+      Origin: "http://localhost:2019",
     };
+
     const replace = await fetch(`${this.adminUrl}/id/route-${projectId}`, {
       method: "PATCH",
       headers,
@@ -29,6 +33,9 @@ export class CaddyClient {
     });
 
     if (replace.ok) {
+      console.log(
+        `Caddy: ruta actualizada para ${host} → host.docker.internal:${port}`,
+      );
       return;
     }
 
@@ -52,5 +59,13 @@ export class CaddyClient {
         `Caddy route create failed: ${created.status} ${await created.text()}`,
       );
     }
+
+    console.log(
+      `Caddy: ruta creada para ${host} → host.docker.internal:${port}`,
+    );
   }
+}
+
+function normalizeAdminUrl(url: string): string {
+  return url.trim().replace(/127\.0\.0\.1/g, "localhost") || DEFAULT_ADMIN_URL;
 }
