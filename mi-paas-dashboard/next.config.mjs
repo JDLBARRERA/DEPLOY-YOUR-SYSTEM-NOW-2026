@@ -19,6 +19,10 @@ const nextConfig = {
   async rewrites() {
     return [
       {
+        source: "/backend/deployments/:projectId/logs",
+        destination: "/api/log-stream/:projectId",
+      },
+      {
         source: "/backend/:path*",
         destination: `${process.env.API_URL}/:path*`,
       },

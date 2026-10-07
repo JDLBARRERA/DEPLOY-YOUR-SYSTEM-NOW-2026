@@ -42,13 +42,24 @@ export async function githubWebhookRoutes(
 
     try {
       const result = await webhooks.receive(event, raw, signatureValue);
+      if (result.repoUrl) {
+        const projects = (result.projectRepoUrls ?? []).map((repositoryUrl) => ({
+          repositoryUrl,
+        }));
+        console.log("Webhook recibido para URL limpia:", result.repoUrl);
+        console.log(
+          "Proyectos en DB:",
+          projects.map((p) => p.repositoryUrl),
+        );
+      }
       if ("ignored" in result) {
+        if (result.missingProject) {
+          console.log("No se encontró proyecto coincidente");
+        }
         return reply.code(200).send({ ignored: true });
       }
-      if (event === "push") {
-        console.log("Trabajo encolado para:", repoUrlFromPayload(raw));
-      }
-      return reply.code(200).send(result);
+      console.log("Trabajo encolado exitosamente");
+      return reply.code(200).send({ deployments: result.deployments });
     } catch (error) {
       if (error instanceof WebhookSignatureError) {
         return reply.code(401).send({ error: error.message });
@@ -62,17 +73,3 @@ export async function githubWebhookRoutes(
   });
 }
 
-function repoUrlFromPayload(raw: Buffer): string {
-  const payload = JSON.parse(raw.toString("utf8")) as {
-    repository?: { clone_url?: unknown; html_url?: unknown };
-  };
-  const cloneUrl = payload.repository?.clone_url;
-  const htmlUrl = payload.repository?.html_url;
-  if (typeof cloneUrl === "string" && cloneUrl) {
-    return cloneUrl;
-  }
-  if (typeof htmlUrl === "string" && htmlUrl) {
-    return htmlUrl;
-  }
-  return "";
-}

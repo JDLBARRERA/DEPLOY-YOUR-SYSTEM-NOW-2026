@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { AeroWindow, WinButton, WinField } from "@/components/aero-window";
 import { StatusBadge } from "@/components/status-badge";
@@ -10,6 +10,7 @@ export default function DeploymentsPage() {
   const [items, setItems] = useState<Deployment[] | null>(null);
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
+  const [logsFor, setLogsFor] = useState<Deployment | null>(null);
 
   const load = useCallback(async () => {
     const next = await apiFetch<Deployment[]>("/deployments");
@@ -75,6 +76,7 @@ export default function DeploymentsPage() {
                 <th className="px-2 py-1 font-semibold">Repositorio</th>
                 <th className="px-2 py-1 font-semibold">Estado</th>
                 <th className="px-2 py-1 font-semibold">Creado</th>
+                <th className="px-2 py-1 font-semibold">Logs</th>
               </tr>
             </thead>
             <tbody>
@@ -83,9 +85,14 @@ export default function DeploymentsPage() {
                   <td className="px-2 py-1 font-medium">{item.projectName}</td>
                   <td className="max-w-xs truncate px-2 py-1">{item.repoUrl}</td>
                   <td className="px-2 py-1">
-                    <StatusBadge status={item.status} />
+                    <button type="button" onClick={() => setLogsFor(item)} className="cursor-pointer">
+                      <StatusBadge status={item.status} />
+                    </button>
                   </td>
                   <td className="px-2 py-1">{formatDate(item.createdAt)}</td>
+                  <td className="px-2 py-1">
+                    <WinButton onClick={() => setLogsFor(item)}>Ver Logs</WinButton>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -117,8 +124,129 @@ export default function DeploymentsPage() {
           </AeroWindow>
         </div>
       ) : null}
+      {logsFor ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-4">
+          <AeroWindow title="Build Logs" onClose={() => setLogsFor(null)}>
+            <BuildLogs deployment={logsFor} />
+          </AeroWindow>
+        </div>
+      ) : null}
     </>
   );
+}
+
+function BuildLogs({ deployment }: { deployment: Deployment }) {
+  const [lines, setLines] = useState<string[]>([]);
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState("");
+  const bottom = useRef<HTMLDivElement>(null);
+  const failed = deployment.status === "failed";
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let cancelled = false;
+
+    async function readLogs() {
+      let received = false;
+      try {
+        const response = await fetch(`/backend/deployments/${deployment.projectId}/logs`, {
+          headers: { Accept: "text/event-stream" },
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) {
+          throw new Error(await readError(response));
+        }
+        if (!cancelled) setReady(true);
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!cancelled) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split(/\r?\n\r?\n/);
+          buffer = events.pop() ?? "";
+          const next = events.map(readSseData).filter((line) => line.length > 0);
+          if (next.length > 0) {
+            received = true;
+            setLines((current) => [...current, ...next]);
+          }
+        }
+      } catch (cause) {
+        if (controller.signal.aborted || cancelled || received) return;
+        setError(cause instanceof Error ? cause.message : "No se pudieron leer los logs");
+      }
+    }
+
+    void readLogs();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [deployment.projectId]);
+
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ block: "end" });
+  }, [lines]);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-sm text-slate-600">
+        {deployment.projectName} · {deployment.status}
+      </p>
+      <div
+        className="h-72 overflow-auto rounded-md bg-black p-3 text-xs leading-5 text-green-100"
+        style={{ fontFamily: "Consolas, 'Courier New', monospace" }}
+      >
+        {error ? <p className="text-red-400">{error}</p> : null}
+        {!ready && lines.length === 0 ? <p className="text-zinc-400">Conectando...</p> : null}
+        {ready && lines.length === 0 && !error ? (
+          <p className="text-zinc-400">Sin registros.</p>
+        ) : null}
+        {lines.map((line, index) => (
+          <p
+            key={`${index}-${line}`}
+            className={`whitespace-pre-wrap break-words ${failed && isErrorLine(line) ? "text-red-400" : ""}`}
+          >
+            {line}
+          </p>
+        ))}
+        <div ref={bottom} />
+      </div>
+    </div>
+  );
+}
+
+function readSseData(event: string): string {
+  const data = event
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  return data ? parseLogLine(data) : "";
+}
+
+async function readError(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: string; message?: string };
+    return body.message || body.error || "No se pudieron leer los logs";
+  } catch {
+    return "No se pudieron leer los logs";
+  }
+}
+
+function parseLogLine(data: string): string {
+  try {
+    const parsed = JSON.parse(data) as unknown;
+    return typeof parsed === "string" ? parsed : data;
+  } catch {
+    return data;
+  }
+}
+
+function isErrorLine(line: string): boolean {
+  return /error|failed|fail|err!|exception|no such|not found|denied/i.test(line);
 }
 
 function formatDate(value: string) {

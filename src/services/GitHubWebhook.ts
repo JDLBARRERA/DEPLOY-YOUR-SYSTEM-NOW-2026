@@ -16,13 +16,22 @@ export class WebhookSignatureError extends Error {
   }
 }
 
+export function normalizeRepoUrl(url: string): string {
+  return url
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
 export function githubRepoKey(url: string): string | null {
-  const cleaned = url.trim().replace(/\.git$/, "").replace(/\/$/, "");
+  const cleaned = normalizeRepoUrl(url);
   const match = cleaned.match(/github\.com[/:]([^/]+)\/([^/]+)$/i);
   if (!match?.[1] || !match[2]) {
     return null;
   }
-  return `${match[1]}/${match[2]}`.toLowerCase();
+  return `${match[1]}/${match[2]}`;
 }
 
 export function verifyGithubSignature(
@@ -94,7 +103,19 @@ export class GitHubWebhookService {
     event: string | undefined,
     raw: Buffer,
     signature: string | undefined,
-  ): Promise<{ deployments: WebhookDeploy[] } | { ignored: true }> {
+  ): Promise<
+    | {
+        deployments: WebhookDeploy[];
+        repoUrl: string;
+        projectRepoUrls: string[];
+      }
+    | {
+        ignored: true;
+        repoUrl?: string;
+        projectRepoUrls?: string[];
+        missingProject?: boolean;
+      }
+  > {
     const secret = process.env.GITHUB_WEBHOOK_SECRET;
     if (!secret) {
       throw new Error("GITHUB_WEBHOOK_SECRET no está configurado");
@@ -112,24 +133,32 @@ export class GitHubWebhookService {
       return { ignored: true };
     }
 
-    const target = this.readTarget(event, payload);
-    if (!target) {
-      return { ignored: true };
-    }
-
-    const repoKey = githubRepoKey(
-      text(payload.repository.html_url) ?? text(payload.repository.clone_url) ?? "",
-    );
-    if (!repoKey) {
+    const incoming =
+      text(payload.repository.html_url) ?? text(payload.repository.clone_url) ?? "";
+    const repoUrl = normalizeRepoUrl(incoming);
+    if (!repoUrl) {
       return { ignored: true };
     }
 
     const projects = await prisma.project.findMany({
       include: { database: true },
     });
-    const matches = projects.filter((project) => githubRepoKey(project.repoUrl) === repoKey);
+    const projectRepoUrls = projects.map((project) => project.repoUrl);
+    const repoKey = githubRepoKey(repoUrl);
+    const matches = projects.filter((project) => {
+      if (normalizeRepoUrl(project.repoUrl) === repoUrl) {
+        return true;
+      }
+      const storedKey = githubRepoKey(project.repoUrl);
+      return repoKey !== null && storedKey === repoKey;
+    });
     if (matches.length === 0) {
-      return { ignored: true };
+      return { ignored: true, repoUrl, projectRepoUrls, missingProject: true };
+    }
+
+    const target = this.readTarget(event, payload);
+    if (!target) {
+      return { ignored: true, repoUrl, projectRepoUrls };
     }
 
     const deployments: WebhookDeploy[] = [];
@@ -191,7 +220,7 @@ export class GitHubWebhookService {
       });
     }
 
-    return { deployments };
+    return { deployments, repoUrl, projectRepoUrls };
   }
 
   private readTarget(
