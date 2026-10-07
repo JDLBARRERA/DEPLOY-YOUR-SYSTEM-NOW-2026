@@ -1,0 +1,20 @@
+---
+description: Este proyecto no usa Supabase
+alwaysApply: true
+---
+
+# Sin Supabase
+
+La base de este proyecto es PostgreSQL propio, con Prisma y PgBouncer. No llames a Supabase.
+
+- No importes `@supabase/supabase-js` ni ningún cliente de Supabase.
+- No uses la API, el MCP, las claves ni el SQL de un proyecto Supabase.
+- No propongas migrar tablas, auth o storage a Supabase.
+
+```ts
+// Incorrecto
+import { createClient } from "@supabase/supabase-js";
+
+// Correcto
+import { prisma } from "../db.js";
+```

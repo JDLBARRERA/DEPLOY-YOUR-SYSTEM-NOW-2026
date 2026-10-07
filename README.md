@@ -1,77 +1,109 @@
 # Deploy your system 2026
 
-Control plane local para desplegar repositorios públicos de GitHub. Clona el repo, lo construye con Nixpacks, lo corre en Docker y lo publica con Caddy. Postgres guarda usuarios, proyectos y bases de datos. Redis guarda la cola y los logs en vivo.
+Motor PaaS propio. Clona un repositorio público de GitHub, lo construye con Nixpacks, lo corre en Docker y lo publica con Caddy. Postgres guarda usuarios, proyectos, despliegues y bases. Redis guarda la cola y los logs en vivo.
 
-El código de este estado todavía no está en un commit posterior al motor inicial. El remoto es `https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git`, rama `main`.
+El remoto es `https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git`, rama `main`. El motor que ya está en GitHub incluye el panel local, los webhooks y los archivos de producción. El panel remoto `mi-paas-dashboard` está en esta carpeta y todavía no forma parte de un commit.
+
+La guía de lo que quedó corriendo en el Droplet está en [SETUP.md](SETUP.md).
 
 ## Cómo está armado
 
 ```text
 .
-├── src/                         API Fastify
+├── src/                         API Fastify (no hay apps/api)
 │   ├── index.ts                 Arranque, CORS y rutas
 │   ├── routes/                  /deploy, /deployments, /databases, /webhooks/github
-│   ├── services/                Motor, Caddy, bases, webhooks, logs
+│   ├── services/                Motor, Caddy, bases, webhooks, logs, dominio
 │   ├── workers/deployWorker.ts  Consumidor de la cola
-│   ├── queues/                  Cola BullMQ "deploys"
-│   └── generated/prisma/        Cliente Prisma (no se versiona)
-├── apps/dashboard/              Next.js, puerto 3001
-│   └── src/app/                 Login, registro y panel
+│   └── queues/                  Cola BullMQ "deploys"
+├── apps/dashboard/              Panel local con Auth.js, puerto 3001
+├── mi-paas-dashboard/           Panel remoto, puerto 3000, sin login
 ├── prisma/                      Esquema y migraciones compartidos
-├── infra/                       Caddy y PgBouncer
-└── docker-compose.yml           Postgres, PgBouncer, Redis y Caddy
+├── infra/                       Compose local, compose de producción, Caddy, PgBouncer
+└── docker-compose.yml           Postgres, PgBouncer, Redis y Caddy en local
 ```
 
-La API no vive en `apps/api`. Fastify está en la raíz, en `src/`. El dashboard y la API importan el mismo cliente Prisma generado desde `prisma/schema.prisma`.
+El panel local y la API usan el cliente Prisma generado desde `prisma/schema.prisma`. Ese cliente no se sube a git.
 
 ```text
-Navegador
+Esta máquina
    │
-   ├─ Panel :3001 ── Auth.js ── Postgres (usuarios, proyectos, despliegues, bases)
-   │                 │
-   │                 └── POST /deploy y /databases
+   ├─ apps/dashboard :3001
+   │     Auth.js, equipos, variables por ámbito, métricas
+   │     habla con la API local :3000
    │
-   └─ API :3000 ── Redis (cola BullMQ + logs SSE)
-                   │
-                   ├── Worker ── git clone ── nixpacks ── Docker
-                   ├── Caddy ── {nombre}.localhost
-                   └── Postgres del cluster ── PgBouncer :6543
+   ├─ mi-paas-dashboard :3000
+   │     Overview, Deployments, Databases, Settings
+   │     el navegador llama a /backend
+   │     Next reescribe /backend hacia el Droplet
+   │
+   └─ API local :3000
+         Redis (cola + logs SSE)
+         Worker → git clone → nixpacks → Docker
+         Caddy → {nombre}.localhost
+         Postgres :5432 y PgBouncer :6543
+
+Droplet 46.101.84.190
+   Caddy :80 → Fastify :3000
+   Postgres, PgBouncer y Redis en Docker
+   El detalle de ese arranque está en SETUP.md
 ```
+
+Hay dos paneles a propósito. `apps/dashboard` es el control plane de esta máquina, con sesión. `mi-paas-dashboard` opera el motor que ya responde en el Droplet y no pide login, porque esos endpoints públicos tampoco la piden.
 
 ## Qué ya funciona
 
 | Área | Estado |
 | --- | --- |
 | Clonar un repo público, construir con Nixpacks y levantar el contenedor | Hecho |
-| Cola BullMQ y logs en vivo por SSE | Hecho |
-| Caddy en `{proyecto}.localhost` | Hecho |
-| Panel con logo propio, formulario de deploy y consola | Hecho |
-| Postgres 16, Prisma y migraciones | Hecho |
-| Login por email y contraseña. GitHub OAuth preparado | Hecho |
-| Primer usuario como admin, con equipo personal | Hecho |
-| Base por proyecto: usuario aislado, pool y URL directa | Hecho |
-| Branch de base con `CREATE DATABASE ... TEMPLATE` | Hecho |
-| Webhook de GitHub firmado, producción y preview | Hecho |
-| Lista de despliegues por proyecto, con autor, rama y URL | Hecho |
+| Cola BullMQ, logs en vivo y CPU/RAM por SSE | Hecho |
+| Caddy en `{proyecto}.localhost` en local | Hecho |
+| Panel local con login, registro y GitHub OAuth | Hecho |
+| Primer usuario admin, con equipo personal. Sesión de 30 días | Hecho |
+| Producción si el push es la rama del proyecto; el resto y los PR son preview | Hecho |
+| Variables `ALL`, `PRODUCTION` y `PREVIEW` | Hecho |
+| Base por proyecto, pool, URL directa y branch con `TEMPLATE` | Hecho |
+| Compose de producción, Caddy con TLS y `infra/setup-ubuntu.sh` | Escrito en el repo |
+| Motor alcanzable en `http://46.101.84.190` | Hecho |
+| Panel remoto contra ese motor | Hecho |
 
 ### API
 
-- `POST /deploy` encola `{ repoUrl, projectName, deploymentId? }`.
-- `GET /deployments` lista contenedores. `GET /deployments/:id/logs` abre el SSE.
-- `POST /databases` crea una base. `POST /databases/:dbName/branch` la clona. `POST /databases/:id/link` inyecta `DATABASE_URL` y `DIRECT_URL` en el proyecto.
-- `POST /webhooks/github` valida `x-hub-signature-256`. Push a `main` o `master` es producción. Otra rama o un pull request es preview en `http://{rama}-{proyecto}.localhost`. Si el proyecto tiene base, el preview recibe un clon.
+- `POST /deploy` encola `{ repoUrl, projectName, deploymentId? }` y responde `202`.
+- `GET /deployments` devuelve `{ projectId, projectName, repoUrl, image, port, status, host, url, createdAt }`. Estados: `queued`, `building`, `running`, `failed`.
+- `GET /deployments/:projectId/logs` y `GET /deployments/:projectId/stats` abren SSE.
+- `GET /databases` devuelve `{ id, name, dbName, pooledUrl, directUrl, host, port, projectId, createdAt }`.
+- `POST /databases` crea una base. `POST /databases/:dbName/branch` la clona. `POST /databases/:id/link` escribe `DATABASE_URL` y `DIRECT_URL` en el proyecto.
+- `POST /webhooks/github` valida `x-hub-signature-256`. Si la rama del push es `Project.branch` (por defecto `main`), el despliegue es producción. Otra rama o un pull request es preview.
 
-### Panel
+En local el host es `{nombre}.localhost` y la URL es `http`. Con `APP_DOMAIN` distinto de `localhost`, la URL pasa a `https://{nombre}.{APP_DOMAIN}`.
 
-- `/login` y `/register`.
-- Pestaña **Despliegues**: formulario, contenedores, consola y, dentro de cada proyecto, **Deployments** (Building, Ready, Failed, main o preview).
-- Pestaña **Databases**: crear base, copiar las dos URLs, crear branch y vincular a un proyecto.
+### Panel local (`apps/dashboard`)
+
+- `/login` y `/register`. Quien ya tiene sesión vuelve a `/`.
+- Un invitado que entra a `/`, `/dashboard`, `/projects`, `/databases` o `/deployments` va a `/login`.
+- Despliegues con badge Production/Preview, autor y medidores de CPU y RAM.
+- Bases: crear, copiar las dos URLs, crear branch y vincular a un proyecto.
+- Variables de entorno por ámbito en cada proyecto.
+
+### Panel remoto (`mi-paas-dashboard`)
+
+Corre en `http://localhost:3000`. El navegador no llama a la IP. `next.config.mjs` reescribe `/backend/*` hacia `API_URL` (`http://46.101.84.190` en `.env.local`).
+
+- Overview: total de despliegues, cuántos están `running`, total de bases y si el API respondió.
+- Deployments: tabla y diálogo con `repoUrl` y `projectName`.
+- Databases: tarjetas y copia de `pooledUrl`. El diálogo pide `name` y un `projectId` opcional.
+- Settings: muestra `/backend` y el valor de `API_URL`.
 
 ### Datos
 
-Postgres del control plane guarda `User`, `Team`, `Project`, `Deployment`, `DatabaseInstance` y `ApiKey`, más las tablas de Auth.js. La contraseña de cada base de proyecto se guarda cifrada. Redis no es la base durable: solo cola y logs.
+Postgres del control plane guarda `User`, `Team`, `Project`, `Deployment`, `EnvVar`, `DatabaseInstance` y `ApiKey`, más las tablas de Auth.js. La contraseña de cada base de proyecto se guarda cifrada. Redis solo guarda la cola y los logs.
 
-## Cómo levantarlo
+La API local usa PgBouncer:
+
+`DATABASE_URL="postgresql://paas:paas@localhost:6543/paas?schema=public"`
+
+## Cómo levantarlo en esta máquina
 
 Hace falta Docker Desktop, Nixpacks en el `PATH` y Node.js.
 
@@ -84,7 +116,7 @@ npm run dev
 npm run worker
 ```
 
-En otra terminal:
+Panel local, en otra terminal:
 
 ```powershell
 cd apps/dashboard
@@ -92,33 +124,38 @@ npm install
 npm run dev -- --port 3001
 ```
 
-El dashboard lee `apps/dashboard/.env.local`: `DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL=http://localhost:3001`, `NEXT_PUBLIC_API_URL=http://localhost:3000` y, si se usa, `AUTH_GITHUB_ID` y `AUTH_GITHUB_SECRET`.
+Panel remoto, en otra terminal:
+
+```powershell
+cd mi-paas-dashboard
+npm install
+npm run dev -- --port 3000
+```
+
+`apps/dashboard/.env.local` lleva `DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL=http://localhost:3001`, `NEXT_PUBLIC_API_URL=http://localhost:3000` y las claves `AUTH_GITHUB_ID` y `AUTH_GITHUB_SECRET`. `mi-paas-dashboard/.env.local` solo lleva `API_URL`. Ninguno de esos archivos se sube a git.
 
 | Servicio | Dirección |
 | --- | --- |
-| Panel | http://localhost:3001 |
-| API | http://localhost:3000 |
+| Panel remoto | http://localhost:3000 |
+| Panel local | http://localhost:3001 |
+| API local | http://localhost:3000 |
+| API del Droplet | http://46.101.84.190 |
 | Postgres | 127.0.0.1:5432 |
 | PgBouncer | 127.0.0.1:6543 |
 | Redis | 127.0.0.1:6379 |
-| Caddy | http://80 y admin en 127.0.0.1:2019 |
+| Caddy local | http://80 y admin en 127.0.0.1:2019 |
 
-Un sitio desplegado responde en `http://{nombre}.localhost`.
+Un sitio desplegado en local responde en `http://{nombre}.localhost`.
+
+Si el panel remoto y la API local se arrancan a la vez, los dos quieren el puerto 3000. Para usar los dos, el panel remoto puede ir en otro puerto: `npm run dev -- --port 3010`. El rewrite sigue saliendo hacia el Droplet.
 
 ## Qué sigue
 
-1. **Webhook alcanzable desde GitHub.** La ruta existe, pero GitHub no puede llamar a `localhost`. Falta un túnel o un dominio público hacia el puerto 3000, y registrar el webhook con el mismo `GITHUB_WEBHOOK_SECRET`.
-2. **Cerrar previews.** Al cerrar el pull request no se apaga el contenedor ni se borra el clon de la base.
-3. **Proteger la API.** `/deploy` y `/databases` aceptan peticiones locales sin sesión. El modelo `ApiKey` está creado y no tiene pantalla ni middleware.
-4. **GitHub OAuth.** El botón está. Falta llenar `AUTH_GITHUB_ID` y `AUTH_GITHUB_SECRET`.
-5. **Borrar y rotar bases.** Se pueden crear, clonar y vincular. No hay borrado ni rotación de contraseña en el panel.
-6. **Variables de entorno generales.** Solo se inyectan `DATABASE_URL` y `DIRECT_URL`. No hay editor para el resto.
-7. **Repos privados.** El motor solo acepta HTTPS público de GitHub.
-8. **Dominio real y TLS.** Caddy publica `*.localhost`. No hay dominios propios ni certificados.
-9. **Límites de recursos.** Cada rol de base tiene límite de conexiones y `statement_timeout`. No hay CPU ni memoria por contenedor.
-10. **Pruebas y CI.** No hay suite automatizada ni workflow de GitHub Actions.
-11. **Varios servidores.** Todo corre en esta máquina. No hay despliegue a un nodo remoto.
-
-## Fuera de este alcance
-
-No está previsto sustituir Redis por Postgres en la cola, ni recrear la app de Next.js. El cliente de Prisma en `src/generated` se regenera con `npx prisma generate` y no se sube a git.
+1. Registrar en GitHub el webhook hacia el motor público, con el mismo `GITHUB_WEBHOOK_SECRET`.
+2. Al cerrar un pull request, apagar el contenedor preview y borrar el clon de la base.
+3. Exigir sesión o `ApiKey` en `/deploy` y `/databases`. Hoy aceptan la petición si el CORS lo permite.
+4. Borrar una base y rotar su contraseña desde el panel.
+5. Aceptar repositorios privados.
+6. Límites de CPU y memoria al crear el contenedor. El panel ya muestra el consumo.
+7. Pruebas automatizadas y un workflow de GitHub Actions.
+8. Dejar el Droplet sirviendo el compose de `infra/docker-compose.prod.yml`. El arranque que ya responde está descrito en [SETUP.md](SETUP.md).

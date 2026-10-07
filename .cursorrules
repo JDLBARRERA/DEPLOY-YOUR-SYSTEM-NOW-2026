@@ -2,3 +2,4 @@
 - Stack: Node.js, TypeScript, Fastify, Dockerode, Simple-Git.
 - Objective: Build a PaaS deployment engine that clones a Git repo, builds it into a Docker image using Nixpacks, and runs the container.
 - Code style: Use async/await, handle process execution safely, keep services decoupled.
+- Database: PostgreSQL del proyecto, Prisma y PgBouncer. Nunca llamar a Supabase, ni por SDK, API, MCP ni SQL.
