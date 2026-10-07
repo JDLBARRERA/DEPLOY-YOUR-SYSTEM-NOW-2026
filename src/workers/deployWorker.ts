@@ -17,6 +17,10 @@ import {
   normalizeImageName,
 } from "../services/DeployEngine.js";
 import { DEPLOY_QUEUE_NAME, type DeployJobData } from "../queues/deployQueue.js";
+import {
+  selectEnv,
+  variablesForDeployment,
+} from "../services/projectEnv.js";
 import { createRedis } from "../redis.js";
 import { syncDeployment } from "../services/syncDeployment.js";
 
@@ -27,6 +31,9 @@ const logs = new LogBus(connection);
 const caddy = new CaddyClient();
 const concurrency = Number(process.env.DEPLOY_CONCURRENCY ?? 5);
 const HEALTH_WAIT_MS = 3000;
+const DEFAULT_RUNTIME_DATABASE_URL =
+  process.env.DEPLOY_DEFAULT_DATABASE_URL?.trim() ||
+  "postgresql://paas:paas@mi-paas-pgbouncer-1:6543/paas?schema=public";
 
 const PORT_KEY_PREFIX = "deploy:port:";
 const PORT_TTL_SECONDS = 60 * 60 * 24;
@@ -138,11 +145,24 @@ const worker = new Worker<DeployJobData>(
         }
       }
 
+      const { variables, deploymentType } =
+        await variablesForDeployment(deploymentId);
+      const runtimeEnv = selectEnv(variables, deploymentType);
+      if (!runtimeEnv.DATABASE_URL?.trim()) {
+        runtimeEnv.DATABASE_URL = DEFAULT_RUNTIME_DATABASE_URL;
+      }
+      runtimeEnv.PORT = "8000";
+      runtimeEnv.NODE_ENV = "production";
+      const envFlags = dockerEnvFlags(runtimeEnv);
+
       await note(
         `Levantando contenedor en el puerto ${puertoLibre} (red ${deployNetwork})...`,
       );
+      await note(
+        `Inyectando env: ${Object.keys(runtimeEnv).sort().join(", ")}`,
+      );
       const containerId = execSync(
-        `docker run -d --name "${containerName}" --network "${deployNetwork}" -p ${puertoLibre}:${containerPort} -e PORT=${containerPort} "${appName}"`,
+        `docker run -d --name "${containerName}" --network "${deployNetwork}" -p ${puertoLibre}:${containerPort} ${envFlags} "${appName}"`,
         { stdio: "pipe" },
       )
         .toString()
@@ -313,6 +333,21 @@ function canBindPort(port: number): Promise<boolean> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function dockerEnvFlags(env: Record<string, string>): string {
+  return Object.entries(env)
+    .filter(([key, value]) => {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        return false;
+      }
+      return typeof value === "string" && !value.includes("\n") && !value.includes("\r");
+    })
+    .map(([key, value]) => {
+      const escaped = value.replace(/'/g, `'\\''`);
+      return `-e '${key}=${escaped}'`;
+    })
+    .join(" ");
 }
 
 function resolveDeployNetwork(): string {
