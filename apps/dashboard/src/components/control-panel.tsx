@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
+import { Loader2 } from "lucide-react";
+import { cn } from "cn";
 import { signOutUser } from "@/app/actions/auth";
 import { listDatabases, type DatabaseView } from "@/app/actions/databases";
 import { startDeploy } from "@/app/actions/deploy";
@@ -20,6 +22,8 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
+const FAST_POLL_MS = 2000;
+const SLOW_POLL_MS = 10000;
 
 interface Deployment {
   projectId: string;
@@ -55,14 +59,33 @@ function UsageMeter({
   );
 }
 
-function statusVariant(status: string): "default" | "secondary" | "destructive" {
-  if (status === "running") {
-    return "default";
+function isActiveStatus(status: string) {
+  return status === "building" || status === "queued";
+}
+
+function StatusPill({ status }: { status: string }) {
+  if (status === "building" || status === "queued") {
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 rounded-full border border-amber-300/80 bg-gradient-to-r from-amber-100 to-sky-200 px-2 py-0.5 text-xs font-medium text-amber-950 animate-pulse",
+        )}
+      >
+        <Loader2 className="size-3 animate-spin" aria-hidden />
+        {status}
+      </span>
+    );
   }
+
   if (status === "failed") {
-    return "destructive";
+    return <Badge variant="destructive">{status}</Badge>;
   }
-  return "secondary";
+
+  if (status === "running") {
+    return <Badge variant="default">{status}</Badge>;
+  }
+
+  return <Badge variant="secondary">{status}</Badge>;
 }
 
 export function ControlPanel({ userLabel }: { userLabel: string }) {
@@ -79,41 +102,62 @@ export function ControlPanel({ userLabel }: { userLabel: string }) {
   const [tab, setTab] = useState<"deploys" | "databases">("deploys");
   const [databases, setDatabases] = useState<DatabaseView[]>([]);
   const [databaseId, setDatabaseId] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [pollMs, setPollMs] = useState(FAST_POLL_MS);
+  const deploymentsRef = useRef(deployments);
+  deploymentsRef.current = deployments;
+
+  const loadDeployments = useCallback(async () => {
+    try {
+      const response = await fetch(`${apiUrl}/deployments`);
+      if (!response.ok) {
+        return;
+      }
+      const data = (await response.json()) as Deployment[];
+      setDeployments((current) => mergeDeployments(current, data));
+    } catch {
+      // The API may still be starting; the next poll retries.
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
-    async function load() {
-      try {
-        const response = await fetch(`${apiUrl}/deployments`);
-        if (!response.ok) {
-          return;
-        }
-        const data = (await response.json()) as Deployment[];
-        if (!cancelled) {
-          setDeployments(data);
-        }
-      } catch {
-        // The API may still be starting; the next poll retries.
-      }
+    async function tick() {
+      if (cancelled) return;
+      await loadDeployments();
+      if (cancelled) return;
+      const active = deploymentsRef.current.some((item) => isActiveStatus(item.status));
+      const nextMs = active || deploymentsRef.current.length === 0 ? FAST_POLL_MS : SLOW_POLL_MS;
+      setPollMs(nextMs);
+      timer = setTimeout(() => {
+        void tick();
+      }, nextMs);
     }
 
-    void load();
-    const timer = setInterval(() => {
-      void load();
-    }, 3000);
-
+    void tick();
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer) clearTimeout(timer);
     };
-  }, []);
+  }, [loadDeployments]);
 
   useEffect(() => {
     void listDatabases().then((result) => {
       setDatabases(result.databases ?? []);
     });
   }, [tab]);
+
+  useEffect(() => {
+    if (!createOpen) {
+      setModalVisible(false);
+      return;
+    }
+    const id = requestAnimationFrame(() => setModalVisible(true));
+    return () => cancelAnimationFrame(id);
+  }, [createOpen]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -150,23 +194,60 @@ export function ControlPanel({ userLabel }: { userLabel: string }) {
     };
   }, [selectedId]);
 
+  function closeCreateModal() {
+    setModalVisible(false);
+    window.setTimeout(() => setCreateOpen(false), 180);
+  }
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
     setError("");
 
+    const optimisticId = `pending-${Date.now()}`;
+    const optimistic: Deployment = {
+      projectId: optimisticId,
+      projectName,
+      repoUrl,
+      image: projectName,
+      port: null,
+      status: "building",
+      host: "",
+      url: "",
+      createdAt: new Date().toISOString(),
+    };
+
+    setDeployments((current) => [optimistic, ...current]);
+    setSelectedId(optimisticId);
+    closeCreateModal();
+
     try {
       const data = await startDeploy(repoUrl, projectName, databaseId || undefined);
       if (!data.projectId) {
+        setDeployments((current) => current.filter((item) => item.projectId !== optimisticId));
+        setSelectedId(null);
         setError(data.error ?? "No se pudo encolar el despliegue");
+        setCreateOpen(true);
         return;
       }
 
+      setDeployments((current) =>
+        current.map((item) =>
+          item.projectId === optimisticId
+            ? { ...item, projectId: data.projectId!, status: "building" }
+            : item,
+        ),
+      );
       setSelectedId(data.projectId);
       setRepoUrl("");
       setProjectName("");
+      setDatabaseId("");
+      void loadDeployments();
     } catch {
+      setDeployments((current) => current.filter((item) => item.projectId !== optimisticId));
+      setSelectedId(null);
       setError("La API no respondió");
+      setCreateOpen(true);
     } finally {
       setSubmitting(false);
     }
@@ -236,133 +317,194 @@ export function ControlPanel({ userLabel }: { userLabel: string }) {
       ) : null}
 
       {tab === "deploys" ? (
-      <div className="grid gap-6 lg:grid-cols-[340px_1fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Nuevo despliegue</CardTitle>
-            <CardDescription>
-              Pega un repositorio público de GitHub. El build entra en cola y no bloquea el panel.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="flex flex-col gap-3" onSubmit={onSubmit}>
-              <label className="flex flex-col gap-1.5 text-sm">
-                URL del repositorio
-                <Input
-                  value={repoUrl}
-                  onChange={(event) => setRepoUrl(event.target.value)}
-                  placeholder="https://github.com/owner/repo"
-                  required
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm">
-                Nombre del proyecto
-                <Input
-                  value={projectName}
-                  onChange={(event) => setProjectName(event.target.value)}
-                  placeholder="mi-app"
-                  required
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm">
-                Base de datos
-                <select
-                  className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
-                  value={databaseId}
-                  onChange={(event) => setDatabaseId(event.target.value)}
-                >
-                  <option value="">Sin base de datos</option>
-                  {databases.map((database) => (
-                    <option key={database.id} value={database.id}>
-                      {database.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {error ? <p className="text-sm text-destructive">{error}</p> : null}
-              <Button type="submit" disabled={submitting}>
-                {submitting ? "Encolando..." : "Deploy"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Contenedores</CardTitle>
-            <CardDescription>
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
               Elige un proyecto para ver la consola de construcción.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            {deployments.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Todavía no hay despliegues.</p>
-            ) : (
-              deployments.map((deployment) => (
-                <button
-                  key={deployment.projectId}
-                  type="button"
-                  onClick={() => setSelectedId(deployment.projectId)}
-                  className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left ${
-                    selectedId === deployment.projectId
-                      ? "border-ring bg-muted"
-                      : "border-border"
-                  }`}
-                >
-                  <span>
-                    <span className="block font-medium">{deployment.image}</span>
-                    <span className="block text-xs text-muted-foreground">
-                      {deployment.port ? `puerto ${deployment.port}` : deployment.repoUrl}
+            </p>
+            <Button type="button" onClick={() => setCreateOpen(true)}>
+              Nuevo Despliegue
+            </Button>
+          </div>
+
+          <Card className="animate-in fade-in duration-300">
+            <CardHeader>
+              <CardTitle>Contenedores</CardTitle>
+              <CardDescription>
+                Polling cada {pollMs / 1000}s
+                {deployments.some((item) => isActiveStatus(item.status))
+                  ? " mientras hay builds activos"
+                  : " en reposo"}
+                .
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              {deployments.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Todavía no hay despliegues.</p>
+              ) : (
+                deployments.map((deployment) => (
+                  <button
+                    key={deployment.projectId}
+                    type="button"
+                    onClick={() => setSelectedId(deployment.projectId)}
+                    className={cn(
+                      "flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition-all duration-300 animate-in fade-in slide-in-from-top-2",
+                      selectedId === deployment.projectId
+                        ? "border-ring bg-muted"
+                        : "border-border hover:bg-muted/40",
+                    )}
+                  >
+                    <span>
+                      <span className="block font-medium">
+                        {deployment.projectName || deployment.image}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {deployment.port ? `puerto ${deployment.port}` : deployment.repoUrl}
+                      </span>
                     </span>
-                  </span>
-                  <Badge variant={statusVariant(deployment.status)}>
-                    {deployment.status}
-                  </Badge>
-                </button>
-              ))
-            )}
-          </CardContent>
-        </Card>
-      </div>
+                    <StatusPill status={deployment.status} />
+                  </button>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
 
       {tab === "deploys" ? <ProjectDeploymentsPanel /> : null}
 
       {tab === "deploys" ? (
-      <Card>
-        <CardHeader>
-          <CardTitle>Consola</CardTitle>
-          <CardDescription>
-            {selected ? (
-              <a className="underline" href={selected.url}>
-                {selected.url}
-              </a>
-            ) : (
-              "Selecciona un despliegue para seguir los logs."
+        <Card
+          className={cn(
+            "transition-all duration-300",
+            selectedId ? "animate-in fade-in slide-in-from-bottom-2" : "",
+          )}
+        >
+          <CardHeader>
+            <CardTitle>Consola / Logs</CardTitle>
+            <CardDescription>
+              {selected ? (
+                selected.url ? (
+                  <a className="underline" href={selected.url}>
+                    {selected.url}
+                  </a>
+                ) : (
+                  `${selected.projectName || selected.image} · ${selected.status}`
+                )
+              ) : (
+                "Selecciona un despliegue para seguir los logs."
+              )}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <UsageMeter
+                label="CPU"
+                text={stats?.cpu == null ? "sin contenedor" : `${stats.cpu.toFixed(1)}%`}
+                percent={stats?.cpu == null ? 0 : Math.min(100, stats.cpu)}
+              />
+              <UsageMeter
+                label="RAM"
+                text={
+                  stats?.memoryMb == null ? "sin contenedor" : `${stats.memoryMb.toFixed(1)} MB`
+                }
+                percent={stats?.memoryMb == null ? 0 : Math.min(100, stats.memoryMb)}
+              />
+            </div>
+            <ScrollArea className="h-80 rounded-lg bg-zinc-950 text-zinc-100">
+              <pre className="p-4 font-mono text-xs leading-5 whitespace-pre-wrap">
+                {logs.length > 0 ? logs.join("\n") : "Sin salida todavía."}
+              </pre>
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {createOpen ? (
+        <div
+          className={cn(
+            "fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 transition-opacity duration-200",
+            modalVisible ? "opacity-100" : "opacity-0",
+          )}
+        >
+          <button
+            type="button"
+            aria-label="Cerrar"
+            className="absolute inset-0"
+            onClick={closeCreateModal}
+          />
+          <Card
+            className={cn(
+              "relative z-10 w-full max-w-md transition-all duration-200",
+              modalVisible
+                ? "translate-y-0 opacity-100"
+                : "-translate-y-3 opacity-0",
             )}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <UsageMeter
-              label="CPU"
-              text={stats?.cpu == null ? "sin contenedor" : `${stats.cpu.toFixed(1)}%`}
-              percent={stats?.cpu == null ? 0 : Math.min(100, stats.cpu)}
-            />
-            <UsageMeter
-              label="RAM"
-              text={stats?.memoryMb == null ? "sin contenedor" : `${stats.memoryMb.toFixed(1)} MB`}
-              percent={stats?.memoryMb == null ? 0 : Math.min(100, stats.memoryMb)}
-            />
-          </div>
-          <ScrollArea className="h-80 rounded-lg bg-zinc-950 text-zinc-100">
-            <pre className="p-4 font-mono text-xs leading-5 whitespace-pre-wrap">
-              {logs.length > 0 ? logs.join("\n") : "Sin salida todavía."}
-            </pre>
-          </ScrollArea>
-        </CardContent>
-      </Card>
+          >
+            <CardHeader>
+              <CardTitle>Nuevo Despliegue</CardTitle>
+              <CardDescription>
+                Pega un repositorio público de GitHub. El build entra en cola y abre los logs al
+                instante.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="flex flex-col gap-3" onSubmit={onSubmit}>
+                <label className="flex flex-col gap-1.5 text-sm">
+                  URL del repositorio
+                  <Input
+                    value={repoUrl}
+                    onChange={(event) => setRepoUrl(event.target.value)}
+                    placeholder="https://github.com/owner/repo"
+                    required
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5 text-sm">
+                  Nombre del proyecto
+                  <Input
+                    value={projectName}
+                    onChange={(event) => setProjectName(event.target.value)}
+                    placeholder="mi-app"
+                    required
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5 text-sm">
+                  Base de datos
+                  <select
+                    className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                    value={databaseId}
+                    onChange={(event) => setDatabaseId(event.target.value)}
+                  >
+                    <option value="">Sin base de datos</option>
+                    {databases.map((database) => (
+                      <option key={database.id} value={database.id}>
+                        {database.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {error ? <p className="text-sm text-destructive">{error}</p> : null}
+                <div className="flex justify-end gap-2 pt-1">
+                  <Button type="button" variant="outline" onClick={closeCreateModal}>
+                    Cancelar
+                  </Button>
+                  <Button type="submit" disabled={submitting}>
+                    {submitting ? "Creando..." : "Crear"}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
     </main>
   );
+}
+
+function mergeDeployments(current: Deployment[], next: Deployment[]): Deployment[] {
+  const byId = new Map(next.map((item) => [item.projectId, item]));
+  const pending = current.filter(
+    (item) => item.projectId.startsWith("pending-") && !byId.has(item.projectId),
+  );
+  return [...pending, ...next];
 }

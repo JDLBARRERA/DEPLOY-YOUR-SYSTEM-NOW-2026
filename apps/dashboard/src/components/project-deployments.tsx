@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { Loader2 } from "lucide-react";
 import { deleteProjectEnvVar, saveProjectEnvVar } from "@/app/actions/env";
 import {
   listProjectDeployments,
@@ -148,11 +149,22 @@ function ProjectEnvEditor({
 function DeploymentRow({ deployment }: { deployment: DeploymentView }) {
   const status = statusBadge(deployment.status);
   const preview = deployment.type === "PREVIEW";
+  const building =
+    deployment.status === "building" ||
+    deployment.status === "queued" ||
+    status.label === "Building";
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border px-3 py-3">
+    <div className="flex flex-col gap-2 rounded-lg border border-border px-3 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={status.variant}>{status.label}</Badge>
+        {building ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-amber-300/80 bg-gradient-to-r from-amber-100 to-sky-200 px-2 py-0.5 text-xs font-medium text-amber-950 animate-pulse">
+            <Loader2 className="size-3 animate-spin" aria-hidden />
+            Building
+          </span>
+        ) : (
+          <Badge variant={status.variant}>{status.label}</Badge>
+        )}
         <Badge variant={preview ? "outline" : "secondary"}>
           {preview ? "Preview" : "Production"}
         </Badge>
