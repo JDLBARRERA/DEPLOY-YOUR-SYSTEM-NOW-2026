@@ -91,6 +91,8 @@ function StatusPill({ status }: { status: string }) {
 export function ControlPanel({ userLabel }: { userLabel: string }) {
   const [repoUrl, setRepoUrl] = useState("");
   const [projectName, setProjectName] = useState("");
+  const [branch, setBranch] = useState("main");
+  const [clearCache, setClearCache] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -222,7 +224,11 @@ export function ControlPanel({ userLabel }: { userLabel: string }) {
     closeCreateModal();
 
     try {
-      const data = await startDeploy(repoUrl, projectName, databaseId || undefined);
+      const data = await startDeploy(repoUrl, projectName, {
+        databaseId: databaseId || undefined,
+        branch: branch.trim() || "main",
+        clearCache,
+      });
       if (!data.projectId) {
         setDeployments((current) => current.filter((item) => item.projectId !== optimisticId));
         setSelectedId(null);
@@ -241,6 +247,8 @@ export function ControlPanel({ userLabel }: { userLabel: string }) {
       setSelectedId(data.projectId);
       setRepoUrl("");
       setProjectName("");
+      setBranch("main");
+      setClearCache(false);
       setDatabaseId("");
       void loadDeployments();
     } catch {
@@ -469,6 +477,15 @@ export function ControlPanel({ userLabel }: { userLabel: string }) {
                   />
                 </label>
                 <label className="flex flex-col gap-1.5 text-sm">
+                  Branch / Rama
+                  <Input
+                    value={branch}
+                    onChange={(event) => setBranch(event.target.value)}
+                    placeholder="main"
+                    required
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5 text-sm">
                   Base de datos
                   <select
                     className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
@@ -482,6 +499,23 @@ export function ControlPanel({ userLabel }: { userLabel: string }) {
                       </option>
                     ))}
                   </select>
+                </label>
+                <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted/40">
+                  <input
+                    type="checkbox"
+                    checked={clearCache}
+                    onChange={(event) => setClearCache(event.target.checked)}
+                    className="mt-0.5 size-4 accent-foreground"
+                  />
+                  <span>
+                    <span className="block font-medium">
+                      Limpiar caché de construcción (Clear Build Cache)
+                    </span>
+                    <span className="block text-xs text-muted-foreground">
+                      Usa <code className="text-[11px]">docker build --no-cache</code> en este
+                      despliegue.
+                    </span>
+                  </span>
                 </label>
                 {error ? <p className="text-sm text-destructive">{error}</p> : null}
                 <div className="flex justify-end gap-2 pt-1">

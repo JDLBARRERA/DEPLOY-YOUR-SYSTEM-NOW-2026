@@ -1,7 +1,17 @@
+import type { Queue } from "bullmq";
 import type { FastifyInstance } from "fastify";
 import Docker from "dockerode";
+import { prisma } from "../db.js";
+import type { DeployJobData } from "../queues/deployQueue.js";
 import type { DeploymentRecord, DeploymentStore } from "../services/DeploymentStore.js";
 import { publicUrlForHost } from "../services/appHost.js";
+import {
+  assertGitBranch,
+  assertGitCommit,
+  DeployValidationError,
+  normalizeImageName,
+} from "../services/DeployEngine.js";
+import { enqueueDeployment } from "../services/enqueueDeployment.js";
 import type { LogBus } from "../services/LogBus.js";
 
 const CONTAINER_PORT = "3000";
@@ -10,6 +20,7 @@ export interface DeploymentRouteDeps {
   store: DeploymentStore;
   logs: LogBus;
   docker: Docker;
+  queue: Queue<DeployJobData>;
 }
 
 function toResponse(record: DeploymentRecord) {
@@ -61,6 +72,74 @@ export async function deploymentRoutes(
     );
     return refreshed.map(toResponse);
   });
+
+  app.post<{ Params: { id: string } }>(
+    "/deployments/:id/redeploy",
+    async (request, reply) => {
+      try {
+        const source = await prisma.deployment.findUnique({
+          where: { id: request.params.id },
+          include: {
+            project: {
+              select: {
+                id: true,
+                name: true,
+                repoUrl: true,
+                branch: true,
+              },
+            },
+          },
+        });
+        if (!source) {
+          return reply.code(404).send({ error: "Deployment not found" });
+        }
+
+        const branch =
+          (source.branch ?? source.project.branch ?? "main").trim() || "main";
+        assertGitBranch(branch);
+        const commitHash = source.commitHash?.trim() || undefined;
+        if (commitHash) {
+          assertGitCommit(commitHash);
+        }
+
+        const redeploy = await prisma.deployment.create({
+          data: {
+            projectId: source.projectId,
+            status: "queued",
+            type: source.type,
+            branch,
+            commitHash: commitHash ?? null,
+            commitMessage: source.commitMessage,
+            commitAuthor: source.commitAuthor,
+            commitAuthorAvatar: source.commitAuthorAvatar,
+          },
+        });
+
+        const image = normalizeImageName(source.project.name);
+        const queued = await enqueueDeployment(deps, {
+          repoUrl: source.project.repoUrl,
+          projectName: source.project.name,
+          image,
+          deploymentId: redeploy.id,
+          branch,
+          commitHash,
+        });
+
+        return reply.code(202).send({
+          projectId: queued.projectId,
+          jobId: queued.jobId,
+          deploymentId: redeploy.id,
+          status: "queued",
+        });
+      } catch (error) {
+        if (error instanceof DeployValidationError) {
+          return reply.code(400).send({ error: error.message });
+        }
+        const message = error instanceof Error ? error.message : "Redeploy failed";
+        return reply.code(500).send({ error: message });
+      }
+    },
+  );
 
   app.get<{ Params: { projectId: string } }>(
     "/deployments/:projectId/logs",

@@ -3,6 +3,8 @@ import type { FastifyInstance } from "fastify";
 import type { DeployJobData } from "../queues/deployQueue.js";
 import { enqueueDeployment } from "../services/enqueueDeployment.js";
 import {
+  assertGitBranch,
+  assertGitCommit,
   assertPublicGitHubRepo,
   DeployValidationError,
   normalizeImageName,
@@ -18,6 +20,9 @@ const deployBodySchema = {
     repoUrl: { type: "string", minLength: 1 },
     projectName: { type: "string", minLength: 1 },
     deploymentId: { type: "string", minLength: 1 },
+    branch: { type: "string", minLength: 1 },
+    commitHash: { type: "string", minLength: 7 },
+    clearCache: { type: "boolean" },
   },
 } as const;
 
@@ -25,6 +30,9 @@ interface DeployBody {
   repoUrl: string;
   projectName: string;
   deploymentId?: string;
+  branch?: string;
+  commitHash?: string;
+  clearCache?: boolean;
 }
 
 export interface DeployRouteDeps {
@@ -43,12 +51,21 @@ export async function deployRoutes(
     async (request, reply) => {
       try {
         assertPublicGitHubRepo(request.body.repoUrl);
+        const branch = (request.body.branch ?? "main").trim() || "main";
+        assertGitBranch(branch);
+        const commitHash = request.body.commitHash?.trim();
+        if (commitHash) {
+          assertGitCommit(commitHash);
+        }
         const image = normalizeImageName(request.body.projectName);
         const queued = await enqueueDeployment(deps, {
           repoUrl: request.body.repoUrl,
           projectName: request.body.projectName,
           image,
           deploymentId: request.body.deploymentId,
+          branch,
+          commitHash: commitHash || undefined,
+          clearCache: request.body.clearCache === true,
         });
 
         return reply.code(202).send({

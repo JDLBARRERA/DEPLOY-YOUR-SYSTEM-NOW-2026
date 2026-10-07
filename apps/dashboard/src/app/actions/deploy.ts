@@ -6,7 +6,11 @@ import { prisma } from "@/db";
 export async function startDeploy(
   repoUrl: string,
   projectName: string,
-  databaseId?: string,
+  options?: {
+    databaseId?: string;
+    branch?: string;
+    clearCache?: boolean;
+  },
 ): Promise<{ projectId?: string; error?: string }> {
   const session = await auth();
   if (!session?.user?.id) {
@@ -20,12 +24,16 @@ export async function startDeploy(
     return { error: "No hay un equipo para este usuario." };
   }
 
+  const branch = (options?.branch ?? "main").trim() || "main";
+  const clearCache = options?.clearCache === true;
+  const databaseId = options?.databaseId;
+
   const project = await prisma.project.create({
     data: {
       name: projectName,
       repoUrl,
       teamId: team.id,
-      branch: "main",
+      branch,
     },
   });
 
@@ -47,7 +55,7 @@ export async function startDeploy(
       projectId: project.id,
       status: "queued",
       type: "PRODUCTION",
-      branch: "main",
+      branch,
     },
   });
 
@@ -59,6 +67,8 @@ export async function startDeploy(
       repoUrl,
       projectName,
       deploymentId: deployment.id,
+      branch,
+      clearCache,
     }),
   });
   const data = (await response.json()) as { projectId?: string; error?: string };
@@ -73,4 +83,41 @@ export async function startDeploy(
   }
 
   return { projectId: data.projectId };
+}
+
+export async function redeployDeployment(
+  deploymentId: string,
+): Promise<{ projectId?: string; deploymentId?: string; error?: string }> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return { error: "Inicia sesión para redesplegar." };
+  }
+
+  const owned = await prisma.deployment.findFirst({
+    where: {
+      id: deploymentId,
+      project: { team: { ownerId: session.user.id } },
+    },
+    select: { id: true },
+  });
+  if (!owned) {
+    return { error: "Despliegue no encontrado." };
+  }
+
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
+  const response = await fetch(`${apiUrl}/deployments/${deploymentId}/redeploy`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  const data = (await response.json()) as {
+    projectId?: string;
+    deploymentId?: string;
+    error?: string;
+  };
+
+  if (!response.ok || !data.projectId) {
+    return { error: data.error ?? "No se pudo redesplegar" };
+  }
+
+  return { projectId: data.projectId, deploymentId: data.deploymentId };
 }

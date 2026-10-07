@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Loader2 } from "lucide-react";
+import { redeployDeployment } from "@/app/actions/deploy";
 import { deleteProjectEnvVar, saveProjectEnvVar } from "@/app/actions/env";
 import {
   listProjectDeployments,
@@ -19,6 +20,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { cn } from "cn";
 
 const SCOPES = ["ALL", "PRODUCTION", "PREVIEW"] as const;
 
@@ -146,13 +148,34 @@ function ProjectEnvEditor({
   );
 }
 
-function DeploymentRow({ deployment }: { deployment: DeploymentView }) {
+function DeploymentRow({
+  deployment,
+  onRedeployed,
+}: {
+  deployment: DeploymentView;
+  onRedeployed?: () => void;
+}) {
   const status = statusBadge(deployment.status);
   const preview = deployment.type === "PREVIEW";
   const building =
     deployment.status === "building" ||
     deployment.status === "queued" ||
     status.label === "Building";
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [redeploying, setRedeploying] = useState(false);
+  const [actionError, setActionError] = useState("");
+
+  async function onRedeploy() {
+    setRedeploying(true);
+    setActionError("");
+    const result = await redeployDeployment(deployment.id);
+    setRedeploying(false);
+    if (result.error) {
+      setActionError(result.error);
+      return;
+    }
+    onRedeployed?.();
+  }
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border px-3 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
@@ -195,6 +218,65 @@ function DeploymentRow({ deployment }: { deployment: DeploymentView }) {
           <span>Sin URL todavía</span>
         )}
       </div>
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <Button type="button" variant="outline" size="sm" onClick={() => setLogsOpen(true)}>
+          Ver Logs
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          disabled={redeploying || building}
+          onClick={() => void onRedeploy()}
+        >
+          {redeploying ? (
+            <span className="inline-flex items-center gap-1">
+              <Loader2 className="size-3 animate-spin" aria-hidden />
+              Redeploy...
+            </span>
+          ) : (
+            "Redeploy"
+          )}
+        </Button>
+      </div>
+      {actionError ? <p className="text-xs text-destructive">{actionError}</p> : null}
+
+      {logsOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <button
+            type="button"
+            aria-label="Cerrar"
+            className="absolute inset-0"
+            onClick={() => setLogsOpen(false)}
+          />
+          <Card className="relative z-10 flex max-h-[80vh] w-full max-w-2xl flex-col">
+            <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
+              <div>
+                <CardTitle>Build Logs</CardTitle>
+                <CardDescription>
+                  {deployment.commitHash
+                    ? `Commit ${deployment.commitHash.slice(0, 7)}`
+                    : deployment.branch ?? "sin rama"}
+                </CardDescription>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={() => setLogsOpen(false)}>
+                Cerrar
+              </Button>
+            </CardHeader>
+            <CardContent className="min-h-0 flex-1 overflow-auto">
+              <pre
+                className={cn(
+                  "rounded-lg bg-zinc-950 p-4 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-100",
+                )}
+              >
+                {deployment.buildLogs?.trim()
+                  ? deployment.buildLogs
+                  : "Sin logs de construcción todavía."}
+              </pre>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -265,7 +347,17 @@ export function ProjectDeploymentsPanel() {
               <p className="text-sm text-muted-foreground">Este proyecto todavía no tiene despliegues.</p>
             ) : (
               project.deployments.map((deployment) => (
-                <DeploymentRow key={deployment.id} deployment={deployment} />
+                <DeploymentRow
+                  key={deployment.id}
+                  deployment={deployment}
+                  onRedeployed={() => {
+                    void listProjectDeployments().then((result) => {
+                      if (result.projects) {
+                        setProjects(result.projects);
+                      }
+                    });
+                  }}
+                />
               ))
             )}
           </CardContent>

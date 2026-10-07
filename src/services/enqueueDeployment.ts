@@ -11,6 +11,8 @@ export interface EnqueueDeployInput {
   image: string;
   deploymentId?: string;
   branch?: string;
+  commitHash?: string;
+  clearCache?: boolean;
   env?: Record<string, string>;
 }
 
@@ -46,6 +48,8 @@ export async function enqueueDeployment(
       image: input.image,
       deploymentId: input.deploymentId,
       branch: input.branch,
+      commitHash: input.commitHash,
+      clearCache: input.clearCache,
       env: input.env,
     },
     { jobId: projectId },

@@ -47,6 +47,7 @@ await deploymentRoutes(app, {
   store,
   logs,
   docker: new Docker(),
+  queue,
 });
 
 try {

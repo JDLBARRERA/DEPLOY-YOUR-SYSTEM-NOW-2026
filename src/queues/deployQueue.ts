@@ -10,6 +10,8 @@ export interface DeployJobData {
   image: string;
   deploymentId?: string;
   branch?: string;
+  commitHash?: string;
+  clearCache?: boolean;
   env?: Record<string, string>;
 }
 

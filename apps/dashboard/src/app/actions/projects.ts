@@ -13,6 +13,7 @@ export interface DeploymentView {
   commitMessage: string | null;
   commitAuthor: string | null;
   commitAuthorAvatar: string | null;
+  buildLogs: string | null;
   createdAt: string;
 }
 
@@ -75,6 +76,7 @@ export async function listProjectDeployments(): Promise<{
         commitMessage: deployment.commitMessage,
         commitAuthor: deployment.commitAuthor ?? null,
         commitAuthorAvatar: deployment.commitAuthorAvatar ?? null,
+        buildLogs: deployment.buildLogs ?? null,
         createdAt: deployment.createdAt.toISOString(),
       })),
     })),

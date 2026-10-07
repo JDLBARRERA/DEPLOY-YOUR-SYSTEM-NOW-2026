@@ -11,6 +11,8 @@ import { CaddyClient } from "../services/CaddyClient.js";
 import { DeploymentStore } from "../services/DeploymentStore.js";
 import { LogBus } from "../services/LogBus.js";
 import {
+  assertGitBranch,
+  assertGitCommit,
   assertPublicGitHubRepo,
   normalizeImageName,
 } from "../services/DeployEngine.js";
@@ -57,6 +59,9 @@ const worker = new Worker<DeployJobData>(
   DEPLOY_QUEUE_NAME,
   async (job) => {
     const { projectId, repoUrl, projectName, deploymentId } = job.data;
+    const branch = (job.data.branch ?? "main").trim() || "main";
+    const commitHash = job.data.commitHash?.trim() || undefined;
+    const clearCache = job.data.clearCache === true;
     const appName = dockerTag(job.data.image, projectName);
     const containerName = `paas-${projectId}`;
     const lines: string[] = [];
@@ -70,18 +75,40 @@ const worker = new Worker<DeployJobData>(
     };
 
     await store.update(projectId, { status: "building" });
-    await syncDeployment(deploymentId, { status: "building" });
+    await syncDeployment(deploymentId, { status: "building", branch });
     await note(`Construyendo ${appName}. Estado: building`);
 
     try {
       assertPublicGitHubRepo(repoUrl);
+      assertGitBranch(branch);
+      if (commitHash) {
+        assertGitCommit(commitHash);
+      }
 
       fs.rmSync(repoDir, { recursive: true, force: true });
       fs.mkdirSync(repoDir, { recursive: true });
 
-      await note("Clonando repositorio...");
-      execSync(`git clone "${repoUrl}" .`, { cwd: repoDir, stdio: "pipe" });
+      await note(`Clonando repositorio (rama ${branch})...`);
+      execSync(`git clone -b "${branch}" --single-branch "${repoUrl}" .`, {
+        cwd: repoDir,
+        stdio: "pipe",
+      });
       cloned = true;
+
+      if (commitHash) {
+        await note(`Checkout commit ${commitHash}...`);
+        execSync(`git checkout "${commitHash}"`, {
+          cwd: repoDir,
+          stdio: "pipe",
+        });
+      }
+
+      const head = execSync("git rev-parse HEAD", {
+        cwd: repoDir,
+        encoding: "utf8",
+        stdio: "pipe",
+      }).trim();
+      await syncDeployment(deploymentId, { commitHash: head, branch });
 
       console.log("Directorio del repo:", repoDir);
       const dockerfilePath = path.join(repoDir, "Dockerfile");
@@ -92,9 +119,16 @@ const worker = new Worker<DeployJobData>(
         lines.push(`Dockerfile autogenerado en: ${dockerfilePath}`);
       }
 
-      await note("Construyendo imagen...");
+      const buildCmd = clearCache
+        ? `docker build --no-cache -t "${appName}" .`
+        : `docker build -t "${appName}" .`;
+      await note(
+        clearCache
+          ? "Construyendo imagen (sin caché)..."
+          : "Construyendo imagen...",
+      );
       try {
-        execSync(`docker build -t "${appName}" .`, {
+        execSync(buildCmd, {
           cwd: repoDir,
           stdio: "pipe",
           encoding: "utf8",

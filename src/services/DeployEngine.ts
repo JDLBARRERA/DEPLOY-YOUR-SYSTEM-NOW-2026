@@ -33,10 +33,17 @@ export interface DeployRequest {
 }
 
 const GIT_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
+const GIT_COMMIT = /^[0-9a-f]{7,40}$/i;
 
 export function assertGitBranch(branch: string): void {
   if (!GIT_BRANCH.test(branch) || branch.includes("..")) {
     throw new DeployValidationError("branch is not a valid git ref");
+  }
+}
+
+export function assertGitCommit(commitHash: string): void {
+  if (!GIT_COMMIT.test(commitHash)) {
+    throw new DeployValidationError("commitHash is not a valid git SHA");
   }
 }
 
