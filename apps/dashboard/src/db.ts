@@ -5,7 +5,7 @@ const globalForPrisma = globalThis as unknown as {
   prismaSchema?: string;
 };
 
-const prismaSchema = "github-previews";
+const prismaSchema = "env-scope";
 
 if (globalForPrisma.prisma && globalForPrisma.prismaSchema !== prismaSchema) {
   void globalForPrisma.prisma.$disconnect();

@@ -33,6 +33,28 @@ interface Deployment {
   createdAt: string;
 }
 
+function UsageMeter({
+  label,
+  text,
+  percent,
+}: {
+  label: string;
+  text: string;
+  percent: number;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-border px-3 py-2">
+      <div className="flex items-center justify-between text-sm">
+        <span className="font-medium">{label}</span>
+        <span className="text-muted-foreground">{text}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function statusVariant(status: string): "default" | "secondary" | "destructive" {
   if (status === "running") {
     return "default";
@@ -51,6 +73,9 @@ export function ControlPanel({ userLabel }: { userLabel: string }) {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
+  const [stats, setStats] = useState<{ cpu: number | null; memoryMb: number | null } | null>(
+    null,
+  );
   const [tab, setTab] = useState<"deploys" | "databases">("deploys");
   const [databases, setDatabases] = useState<DatabaseView[]>([]);
   const [databaseId, setDatabaseId] = useState("");
@@ -100,6 +125,24 @@ export function ControlPanel({ userLabel }: { userLabel: string }) {
     source.onmessage = (event: MessageEvent<string>) => {
       const line = JSON.parse(event.data) as string;
       setLogs((current) => [...current, line]);
+    };
+
+    return () => {
+      source.close();
+    };
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setStats(null);
+      return;
+    }
+
+    setStats(null);
+    const source = new EventSource(`${apiUrl}/deployments/${selectedId}/stats`);
+    source.onmessage = (event: MessageEvent<string>) => {
+      const next = JSON.parse(event.data) as { cpu: number | null; memoryMb: number | null };
+      setStats(next);
     };
 
     return () => {
@@ -299,7 +342,19 @@ export function ControlPanel({ userLabel }: { userLabel: string }) {
             )}
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <UsageMeter
+              label="CPU"
+              text={stats?.cpu == null ? "sin contenedor" : `${stats.cpu.toFixed(1)}%`}
+              percent={stats?.cpu == null ? 0 : Math.min(100, stats.cpu)}
+            />
+            <UsageMeter
+              label="RAM"
+              text={stats?.memoryMb == null ? "sin contenedor" : `${stats.memoryMb.toFixed(1)} MB`}
+              percent={stats?.memoryMb == null ? 0 : Math.min(100, stats.memoryMb)}
+            />
+          </div>
           <ScrollArea className="h-80 rounded-lg bg-zinc-950 text-zinc-100">
             <pre className="p-4 font-mono text-xs leading-5 whitespace-pre-wrap">
               {logs.length > 0 ? logs.join("\n") : "Sin salida todavía."}

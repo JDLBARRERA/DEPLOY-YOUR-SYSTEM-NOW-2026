@@ -12,7 +12,15 @@ export interface DeploymentView {
   commitHash: string | null;
   commitMessage: string | null;
   commitAuthor: string | null;
+  commitAuthorAvatar: string | null;
   createdAt: string;
+}
+
+export interface EnvVarView {
+  id: string;
+  key: string;
+  value: string;
+  environment: "ALL" | "PRODUCTION" | "PREVIEW";
 }
 
 export interface ProjectDeployments {
@@ -20,6 +28,7 @@ export interface ProjectDeployments {
   name: string;
   repoUrl: string;
   deployments: DeploymentView[];
+  env: EnvVarView[];
 }
 
 export async function listProjectDeployments(): Promise<{
@@ -39,6 +48,9 @@ export async function listProjectDeployments(): Promise<{
         orderBy: { createdAt: "desc" },
         take: 20,
       },
+      env: {
+        orderBy: [{ key: "asc" }, { environment: "asc" }],
+      },
     },
   });
 
@@ -47,6 +59,12 @@ export async function listProjectDeployments(): Promise<{
       id: project.id,
       name: project.name,
       repoUrl: project.repoUrl,
+      env: project.env.map((variable) => ({
+        id: variable.id,
+        key: variable.key,
+        value: variable.value,
+        environment: variable.environment,
+      })),
       deployments: project.deployments.map((deployment) => ({
         id: deployment.id,
         status: deployment.status,
@@ -56,6 +74,7 @@ export async function listProjectDeployments(): Promise<{
         commitHash: deployment.commitHash,
         commitMessage: deployment.commitMessage,
         commitAuthor: deployment.commitAuthor ?? null,
+        commitAuthorAvatar: deployment.commitAuthorAvatar ?? null,
         createdAt: deployment.createdAt.toISOString(),
       })),
     })),

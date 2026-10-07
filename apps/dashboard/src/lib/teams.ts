@@ -15,10 +15,13 @@ export async function ensurePersonalTeam(
   userId: string,
   email: string,
   name?: string | null,
-): Promise<void> {
-  const existing = await prisma.team.count({ where: { ownerId: userId } });
-  if (existing > 0) {
-    return;
+): Promise<string> {
+  const existing = await prisma.team.findFirst({
+    where: { ownerId: userId },
+    orderBy: { createdAt: "asc" },
+  });
+  if (existing) {
+    return existing.id;
   }
 
   const base = slugBase(email);
@@ -31,11 +34,12 @@ export async function ensurePersonalTeam(
     slug = `${base}-${randomBytes(2).toString("hex")}`;
   }
 
-  await prisma.team.create({
+  const team = await prisma.team.create({
     data: {
       name: name?.trim() || base,
       slug,
       ownerId: userId,
     },
   });
+  return team.id;
 }

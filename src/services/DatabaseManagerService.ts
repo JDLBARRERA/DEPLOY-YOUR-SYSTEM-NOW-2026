@@ -7,7 +7,6 @@ import {
 import pg from "pg";
 import { prisma } from "../db.js";
 import type { DatabaseInstance } from "../generated/prisma/index.js";
-import { readEnvRecord } from "./projectEnv.js";
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]{0,62}$/;
 const CONNECTION_LIMIT = 20;
@@ -439,16 +438,8 @@ export class DatabaseManagerService {
       instance.pooledPort,
     );
 
-    const envVars = {
-      ...readEnvRecord(project.envVars),
-      DATABASE_URL: runtime.pooledUrl,
-      DIRECT_URL: direct.directUrl,
-    };
-
-    await prisma.project.update({
-      where: { id: projectId },
-      data: { envVars },
-    });
+    await upsertDatabaseEnv(projectId, "DATABASE_URL", runtime.pooledUrl);
+    await upsertDatabaseEnv(projectId, "DIRECT_URL", direct.directUrl);
   }
 
   private async detachOtherDatabase(projectId: string, keepId: string): Promise<void> {
@@ -463,16 +454,35 @@ export class DatabaseManagerService {
   }
 
   private async clearDatabaseEnv(projectId: string): Promise<void> {
-    const project = await prisma.project.findUnique({ where: { id: projectId } });
-    if (!project) {
-      return;
-    }
-    const envVars = readEnvRecord(project.envVars);
-    delete envVars.DATABASE_URL;
-    delete envVars.DIRECT_URL;
-    await prisma.project.update({
-      where: { id: projectId },
-      data: { envVars },
+    await prisma.envVar.deleteMany({
+      where: {
+        projectId,
+        environment: "ALL",
+        key: { in: ["DATABASE_URL", "DIRECT_URL"] },
+      },
     });
   }
+}
+
+async function upsertDatabaseEnv(
+  projectId: string,
+  key: string,
+  value: string,
+): Promise<void> {
+  await prisma.envVar.upsert({
+    where: {
+      projectId_key_environment: {
+        projectId,
+        key,
+        environment: "ALL",
+      },
+    },
+    create: {
+      projectId,
+      key,
+      value,
+      environment: "ALL",
+    },
+    update: { value },
+  });
 }

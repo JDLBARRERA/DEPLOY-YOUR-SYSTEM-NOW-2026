@@ -6,7 +6,7 @@ import { DeploymentStore } from "../services/DeploymentStore.js";
 import { LogBus } from "../services/LogBus.js";
 import { DEPLOY_QUEUE_NAME, type DeployJobData } from "../queues/deployQueue.js";
 import { createRedis } from "../redis.js";
-import { envForDeployment, readEnvRecord } from "../services/projectEnv.js";
+import { readEnvRecord, variablesForDeployment } from "../services/projectEnv.js";
 import { syncDeployment } from "../services/syncDeployment.js";
 
 const connection = createRedis();
@@ -38,17 +38,16 @@ const worker = new Worker<DeployJobData>(
     };
 
     try {
-      const env = {
-        ...(await envForDeployment(deploymentId)),
-        ...readEnvRecord(job.data.env),
-      };
+      const scoped = await variablesForDeployment(deploymentId);
       const result = await engine.deploy({
         repoUrl,
         projectName,
         projectId,
         image,
         branch,
-        env,
+        variables: scoped.variables,
+        deploymentType: scoped.deploymentType,
+        env: readEnvRecord(job.data.env),
         onLog,
       });
       await logChain;

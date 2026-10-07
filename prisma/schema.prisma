@@ -18,6 +18,12 @@ enum DeploymentType {
   PREVIEW
 }
 
+enum EnvScope {
+  ALL
+  PRODUCTION
+  PREVIEW
+}
+
 model User {
   id            String    @id @default(cuid())
   name          String?
@@ -87,7 +93,20 @@ model Project {
   envVars     Json         @default("{}")
   createdAt   DateTime     @default(now())
   deployments Deployment[]
+  env         EnvVar[]
   database    DatabaseInstance?
+}
+
+model EnvVar {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  key         String
+  value       String   @db.Text
+  environment EnvScope @default(ALL)
+  createdAt   DateTime @default(now())
+
+  @@unique([projectId, key, environment])
 }
 
 model Deployment {
@@ -102,8 +121,9 @@ model Deployment {
   buildLogs     String?        @db.Text
   commitHash    String?
   commitMessage String?        @db.Text
-  commitAuthor  String?
-  branch        String?
+  commitAuthor       String?
+  commitAuthorAvatar String?
+  branch             String?
   createdAt     DateTime       @default(now())
 }
 

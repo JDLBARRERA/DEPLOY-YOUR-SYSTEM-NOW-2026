@@ -6,19 +6,38 @@ export const authConfig = {
   },
   session: {
     strategy: "jwt",
+    maxAge: 30 * 24 * 60 * 60,
   },
   providers: [],
   callbacks: {
     authorized({ auth, request }) {
       const path = request.nextUrl.pathname;
-      const isPublic =
-        path.startsWith("/login") ||
-        path.startsWith("/register") ||
-        path.startsWith("/api/auth");
-      if (isPublic) {
+      const loggedIn = !!auth?.user;
+      const panel = new URL("/", request.nextUrl);
+
+      if (path.startsWith("/api/auth")) {
         return true;
       }
-      return !!auth?.user;
+
+      const authPage = path.startsWith("/login") || path.startsWith("/register");
+      if (authPage) {
+        if (loggedIn) {
+          return Response.redirect(panel);
+        }
+        return true;
+      }
+
+      const panelAlias = ["/dashboard", "/projects", "/databases", "/deployments"].some(
+        (route) => path === route || path.startsWith(`${route}/`),
+      );
+      if (panelAlias) {
+        if (!loggedIn) {
+          return false;
+        }
+        return Response.redirect(panel);
+      }
+
+      return loggedIn;
     },
     jwt({ token, user }) {
       if (user) {
@@ -32,6 +51,8 @@ export const authConfig = {
         session.user.id = String(token.sub ?? "");
         session.user.role =
           typeof token.role === "string" ? token.role : "member";
+        session.user.teamId =
+          typeof token.teamId === "string" ? token.teamId : "";
       }
       return session;
     },

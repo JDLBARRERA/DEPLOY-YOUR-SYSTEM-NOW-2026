@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import Docker from "dockerode";
 import { simpleGit } from "simple-git";
+import { selectEnv, type DeploymentEnvType, type ScopedEnvVar } from "./projectEnv.js";
 
 const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 const CONTAINER_PORT = "3000";
@@ -26,6 +27,8 @@ export interface DeployRequest {
   image?: string;
   branch?: string;
   env?: Record<string, string>;
+  variables?: ScopedEnvVar[];
+  deploymentType?: DeploymentEnvType;
   onLog?: (line: string) => void;
 }
 
@@ -147,7 +150,10 @@ export class DeployEngine {
     const image = normalizeImageName(input.image ?? input.projectName);
     const projectId = input.projectId ?? randomBytes(8).toString("hex");
     const onLog = input.onLog ?? (() => undefined);
-    const env = input.env ?? {};
+    const env = {
+      ...selectEnv(input.variables ?? [], input.deploymentType ?? "PRODUCTION"),
+      ...(input.env ?? {}),
+    };
     const workDir = path.join(os.tmpdir(), "builds", projectId);
     let commitHash: string | null = null;
 

@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { AuthError } from "next-auth";
 import { signIn, signOut } from "@/auth";
 import { prisma } from "@/db";
+import { githubOAuthCredentials } from "@/lib/github-oauth";
 import { ensurePersonalTeam } from "@/lib/teams";
 
 export async function registerUser(
@@ -72,7 +73,7 @@ export async function signInWithGitHub(
   _state: { error: string },
   _formData: FormData,
 ): Promise<{ error: string }> {
-  if (!process.env.AUTH_GITHUB_ID || !process.env.AUTH_GITHUB_SECRET) {
+  if (!githubOAuthCredentials()) {
     return {
       error:
         "GitHub OAuth no está configurado. Añade AUTH_GITHUB_ID y AUTH_GITHUB_SECRET.",

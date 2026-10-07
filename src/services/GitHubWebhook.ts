@@ -48,6 +48,29 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function githubAvatar(username: string | undefined): string | null {
+  if (!username || !/^[A-Za-z0-9-]{1,39}$/.test(username)) {
+    return null;
+  }
+  return `https://github.com/${username}.png`;
+}
+
+function githubAvatarUrl(url: string | undefined): string | null {
+  if (!url) {
+    return null;
+  }
+  try {
+    const parsed = new URL(url);
+    const allowed =
+      parsed.protocol === "https:" &&
+      (parsed.hostname === "avatars.githubusercontent.com" ||
+        parsed.hostname === "github.com");
+    return allowed ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 interface WebhookDeploy {
   deploymentId: string;
   projectId: string;
@@ -110,7 +133,12 @@ export class GitHubWebhookService {
 
     const deployments: WebhookDeploy[] = [];
     for (const project of matches) {
-      const preview = target.type === "PREVIEW";
+      const productionBranch = project.branch.trim() || "main";
+      const type: "PRODUCTION" | "PREVIEW" =
+        target.event === "push" && target.branch === productionBranch
+          ? "PRODUCTION"
+          : "PREVIEW";
+      const preview = type === "PREVIEW";
       const image = deploymentImageName(project.name, target.branch, preview);
       let env: Record<string, string> | undefined;
       let databaseWarning = "";
@@ -131,11 +159,12 @@ export class GitHubWebhookService {
         data: {
           projectId: project.id,
           status: "queued",
-          type: target.type,
+          type,
           branch: target.branch,
           commitHash: target.commitHash,
           commitMessage: target.commitMessage.slice(0, 4000),
           commitAuthor: target.commitAuthor.slice(0, 200),
+          commitAuthorAvatar: target.commitAuthorAvatar,
           url,
         },
       });
@@ -155,7 +184,7 @@ export class GitHubWebhookService {
       deployments.push({
         deploymentId: deployment.id,
         projectId: queued.projectId,
-        type: target.type,
+        type,
         url,
         branch: target.branch,
       });
@@ -168,11 +197,12 @@ export class GitHubWebhookService {
     event: string | undefined,
     payload: Record<string, unknown>,
   ): {
-    type: "PRODUCTION" | "PREVIEW";
+    event: "push" | "pull_request";
     branch: string;
     commitHash: string;
     commitMessage: string;
     commitAuthor: string;
+    commitAuthorAvatar: string | null;
     cloneUrl: string;
   } | null {
     const repository = payload.repository;
@@ -200,17 +230,14 @@ export class GitHubWebhookService {
       const head = isRecord(payload.head_commit) ? payload.head_commit : undefined;
       const authorRecord = head && isRecord(head.author) ? head.author : undefined;
       const pusher = isRecord(payload.pusher) ? payload.pusher : undefined;
-      const production = branch === "main" || branch === "master";
+      const username = text(authorRecord?.username);
       return {
-        type: production ? "PRODUCTION" : "PREVIEW",
+        event: "push",
         branch,
         commitHash: text(head?.id) ?? after,
         commitMessage: text(head?.message) ?? "",
-        commitAuthor:
-          text(authorRecord?.username) ??
-          text(authorRecord?.name) ??
-          text(pusher?.name) ??
-          "github",
+        commitAuthor: username ?? text(authorRecord?.name) ?? text(pusher?.name) ?? "github",
+        commitAuthorAvatar: githubAvatar(username),
         cloneUrl: baseClone,
       };
     }
@@ -230,11 +257,12 @@ export class GitHubWebhookService {
         return null;
       }
       return {
-        type: "PREVIEW",
+        event: "pull_request",
         branch,
         commitHash,
         commitMessage: text(pull.title) ?? "",
         commitAuthor: text(user?.login) ?? "github",
+        commitAuthorAvatar: githubAvatarUrl(text(user?.avatar_url)),
         cloneUrl: text(headRepo?.clone_url) ?? baseClone,
       };
     }

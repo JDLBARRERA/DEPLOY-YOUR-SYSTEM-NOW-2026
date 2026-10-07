@@ -94,4 +94,107 @@ export async function deploymentRoutes(
       request.raw.on("close", close);
     },
   );
+
+  app.get<{ Params: { projectId: string } }>(
+    "/deployments/:projectId/stats",
+    async (request, reply) => {
+      const { projectId } = request.params;
+      reply.hijack();
+      reply.raw.writeHead(200, sseHeaders());
+
+      const send = (payload: { cpu: number | null; memoryMb: number | null }) => {
+        if (!reply.raw.writableEnded) {
+          reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+        }
+      };
+
+      if (!/^[a-f0-9]{16}$/.test(projectId)) {
+        send({ cpu: null, memoryMb: null });
+        reply.raw.end();
+        return;
+      }
+
+      const container = deps.docker.getContainer(`paas-${projectId}`);
+      let stream: NodeJS.ReadableStream;
+      try {
+        await container.inspect();
+        stream = (await container.stats({ stream: true })) as NodeJS.ReadableStream;
+      } catch {
+        send({ cpu: null, memoryMb: null });
+        reply.raw.end();
+        return;
+      }
+
+      let buffer = "";
+      const onData = (chunk: Buffer | string) => {
+        buffer += chunk.toString();
+        const parts = buffer.split(/\n/);
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line) {
+            continue;
+          }
+          try {
+            send(readContainerStats(JSON.parse(line) as DockerStatsSample));
+          } catch {
+            // A partial Docker frame is completed by the next chunk.
+          }
+        }
+      };
+
+      const close = () => {
+        stream.off("data", onData);
+        const destroyable = stream as NodeJS.ReadableStream & { destroy?: () => void };
+        destroyable.destroy?.();
+      };
+
+      stream.on("data", onData);
+      stream.on("error", close);
+      stream.on("end", () => {
+        if (!reply.raw.writableEnded) {
+          reply.raw.end();
+        }
+      });
+      request.raw.on("close", close);
+    },
+  );
+}
+
+function sseHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "http://localhost:3001",
+  };
+}
+
+interface DockerStatsSample {
+  cpu_stats?: {
+    online_cpus?: number;
+    system_cpu_usage?: number;
+    cpu_usage?: { total_usage?: number; percpu_usage?: number[] };
+  };
+  precpu_stats?: {
+    system_cpu_usage?: number;
+    cpu_usage?: { total_usage?: number };
+  };
+  memory_stats?: { usage?: number };
+}
+
+function readContainerStats(stats: DockerStatsSample): { cpu: number; memoryMb: number } {
+  const cpuDelta =
+    (stats.cpu_stats?.cpu_usage?.total_usage ?? 0) -
+    (stats.precpu_stats?.cpu_usage?.total_usage ?? 0);
+  const systemDelta =
+    (stats.cpu_stats?.system_cpu_usage ?? 0) - (stats.precpu_stats?.system_cpu_usage ?? 0);
+  const online =
+    stats.cpu_stats?.online_cpus || stats.cpu_stats?.cpu_usage?.percpu_usage?.length || 1;
+  const cpu =
+    systemDelta > 0 && cpuDelta >= 0
+      ? Math.round((cpuDelta / systemDelta) * online * 1000) / 10
+      : 0;
+  const memoryMb = Math.round(((stats.memory_stats?.usage ?? 0) / (1024 * 1024)) * 10) / 10;
+  return { cpu, memoryMb };
 }
