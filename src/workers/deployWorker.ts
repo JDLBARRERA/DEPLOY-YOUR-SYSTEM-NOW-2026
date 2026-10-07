@@ -30,7 +30,8 @@ const store = new DeploymentStore(connection);
 const logs = new LogBus(connection);
 const caddy = new CaddyClient();
 const concurrency = Number(process.env.DEPLOY_CONCURRENCY ?? 5);
-const HEALTH_WAIT_MS = 3000;
+const HEALTH_TIMEOUT_MS = 15_000;
+const HEALTH_INTERVAL_MS = 2_000;
 const DEFAULT_RUNTIME_DATABASE_URL =
   process.env.DEPLOY_DEFAULT_DATABASE_URL?.trim() ||
   "postgresql://paas:paas@mi-paas-pgbouncer-1:6543/paas?schema=public";
@@ -168,10 +169,10 @@ const worker = new Worker<DeployJobData>(
         .toString()
         .trim();
 
-      await note(`Esperando ${HEALTH_WAIT_MS / 1000}s para health check...`);
-      await sleep(HEALTH_WAIT_MS);
-
-      const health = await checkContainerHealth(containerId, puertoLibre);
+      await note(
+        `Health check: intentando cada ${HEALTH_INTERVAL_MS / 1000}s durante hasta ${HEALTH_TIMEOUT_MS / 1000}s (cualquier HTTP = OK)...`,
+      );
+      const health = await checkContainerHealth(containerId, puertoLibre, note);
       if (!health.ok) {
         const dockerLogs = readDockerLogs(containerId);
         const failure = [
@@ -197,8 +198,6 @@ const worker = new Worker<DeployJobData>(
         reservedPort = null;
         throw new Error(health.reason);
       }
-
-      await note(`Health check OK (Running=true) en el puerto ${puertoLibre}.`);
 
       let routed = false;
       try {
@@ -414,49 +413,81 @@ function containerRunning(containerId: string): { running: boolean; status: stri
   }
 }
 
-function httpReachable(port: number): Promise<boolean> {
+type HttpProbeResult =
+  | { ok: true; statusCode: number }
+  | { ok: false; code: string };
+
+function probeHttp(port: number): Promise<HttpProbeResult> {
   return new Promise((resolve) => {
     const request = http.get(
       {
         hostname: "127.0.0.1",
         port,
         path: "/",
-        timeout: 2000,
+        timeout: HEALTH_INTERVAL_MS,
       },
       (response) => {
         response.resume();
-        resolve(true);
+        resolve({ ok: true, statusCode: response.statusCode ?? 0 });
       },
     );
     request.on("timeout", () => {
       request.destroy();
-      resolve(false);
+      resolve({ ok: false, code: "ETIMEDOUT" });
     });
-    request.on("error", () => resolve(false));
+    request.on("error", (error: NodeJS.ErrnoException) => {
+      resolve({ ok: false, code: error.code ?? error.message });
+    });
   });
 }
 
 async function checkContainerHealth(
   containerId: string,
   hostPort: number,
+  note?: (message: string) => Promise<void>,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const state = containerRunning(containerId);
-  if (!state.running) {
-    return {
-      ok: false,
-      reason: `Health check falló: docker inspect Running=false (estado "${state.status}").`,
-    };
+  const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+  let attempt = 0;
+  let lastCode = "ECONNREFUSED";
+
+  while (Date.now() <= deadline) {
+    attempt += 1;
+
+    const state = containerRunning(containerId);
+    if (!state.running) {
+      return {
+        ok: false,
+        reason: `Health check falló: el contenedor pasó a estado "${state.status}" (Running=false).`,
+      };
+    }
+
+    const probe = await probeHttp(hostPort);
+    if (probe.ok) {
+      if (note) {
+        await note(
+          `Health check OK en intento ${attempt}: HTTP ${probe.statusCode} en el puerto ${hostPort}.`,
+        );
+      }
+      return { ok: true };
+    }
+
+    lastCode = probe.code;
+    if (note) {
+      await note(
+        `Health check intento ${attempt}: ${probe.code} en :${hostPort}; reintentando...`,
+      );
+    }
+
+    if (Date.now() + HEALTH_INTERVAL_MS > deadline) {
+      break;
+    }
+    await sleep(HEALTH_INTERVAL_MS);
   }
 
-  const reachable = await httpReachable(hostPort);
-  if (!reachable) {
-    return {
-      ok: false,
-      reason: `Health check falló: el contenedor corre pero no responde HTTP en el puerto ${hostPort}.`,
-    };
-  }
-
-  return { ok: true };
+  return {
+    ok: false,
+    reason: `Health check falló tras ${HEALTH_TIMEOUT_MS / 1000}s: conexión no establecida en el puerto ${hostPort} (${lastCode}).`,
+  };
 }
 
 function commandError(error: unknown): string {
