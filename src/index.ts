@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "./workers/deployWorker.js";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import Docker from "dockerode";

@@ -45,7 +45,10 @@ export async function githubWebhookRoutes(
       if ("ignored" in result) {
         return reply.code(200).send({ ignored: true });
       }
-      return reply.code(202).send(result);
+      if (event === "push") {
+        console.log("Trabajo encolado para:", repoUrlFromPayload(raw));
+      }
+      return reply.code(200).send(result);
     } catch (error) {
       if (error instanceof WebhookSignatureError) {
         return reply.code(401).send({ error: error.message });
@@ -57,4 +60,19 @@ export async function githubWebhookRoutes(
       return reply.code(500).send({ error: message });
     }
   });
+}
+
+function repoUrlFromPayload(raw: Buffer): string {
+  const payload = JSON.parse(raw.toString("utf8")) as {
+    repository?: { clone_url?: unknown; html_url?: unknown };
+  };
+  const cloneUrl = payload.repository?.clone_url;
+  const htmlUrl = payload.repository?.html_url;
+  if (typeof cloneUrl === "string" && cloneUrl) {
+    return cloneUrl;
+  }
+  if (typeof htmlUrl === "string" && htmlUrl) {
+    return htmlUrl;
+  }
+  return "";
 }
