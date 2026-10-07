@@ -15,14 +15,22 @@ export async function GET(
     return Response.json({ error: "API_URL no está configurado" }, { status: 500 });
   }
 
-  const upstream = await fetch(`${apiUrl}/deployments/${projectId}/logs`, {
-    headers: {
-      Accept: "text/event-stream",
-      "Accept-Encoding": "identity",
-    },
-    cache: "no-store",
-    signal: request.signal,
-  });
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${apiUrl}/deployments/${projectId}/logs`, {
+      headers: {
+        Accept: "text/event-stream",
+        "Accept-Encoding": "identity",
+      },
+      cache: "no-store",
+      signal: request.signal,
+    });
+  } catch (error) {
+    if (request.signal.aborted || isAbortError(error)) {
+      return new Response(null, { status: 204 });
+    }
+    throw error;
+  }
 
   if (!upstream.ok || !upstream.body) {
     const text = await upstream.text();
@@ -37,15 +45,31 @@ export async function GET(
   const reader = upstream.body.getReader();
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
-        return;
+      try {
+        if (request.signal.aborted) {
+          controller.close();
+          return;
+        }
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        if (request.signal.aborted || isAbortError(error)) {
+          try {
+            controller.close();
+          } catch {
+            // The browser already closed the stream.
+          }
+          return;
+        }
+        controller.error(error);
       }
-      controller.enqueue(value);
     },
     cancel() {
-      void reader.cancel();
+      void reader.cancel().catch(() => undefined);
     },
   });
 
@@ -59,4 +83,11 @@ export async function GET(
       "X-Logs-Proxy": "1",
     },
   });
+}
+
+function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const name = "name" in error ? String(error.name) : "";
+  const message = "message" in error ? String(error.message) : "";
+  return name === "AbortError" || name === "ResponseAborted" || /aborted/i.test(message);
 }

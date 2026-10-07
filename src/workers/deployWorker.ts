@@ -27,7 +27,8 @@ const worker = new Worker<DeployJobData>(
     const { projectId, repoUrl, projectName, deploymentId } = job.data;
     const imageTag = dockerTag(job.data.image, projectName);
     const lines: string[] = [];
-    let workdir = "";
+    const repoDir = repoDirectory(job.id);
+    let cloned = false;
 
     const note = async (message: string) => {
       console.log(message);
@@ -40,18 +41,26 @@ const worker = new Worker<DeployJobData>(
     await note(`Construyendo ${imageTag}. Estado: building`);
 
     try {
-      workdir = deploymentDir(projectId);
       assertPublicGitHubRepo(repoUrl);
-      await rm(workdir, { recursive: true, force: true });
-      await mkdir(path.dirname(workdir), { recursive: true });
+      await rm(repoDir, { recursive: true, force: true });
+      await mkdir(path.dirname(repoDir), { recursive: true });
 
       await note("Clonando repositorio...");
-      await execAsync(`git clone ${shellArg(repoUrl)} ${shellArg(workdir)}`);
+      await execAsync(`git clone ${shellArg(repoUrl)} ${shellArg(repoDir)}`);
+      cloned = true;
 
-      await note(await ensureDockerfile(workdir));
+      const dockerfilePath = path.join(repoDir, "Dockerfile");
+      if (!(await fileExists(dockerfilePath))) {
+        console.log("No hay Dockerfile. Creando uno en:", repoDir);
+        await logs.append(projectId, `No hay Dockerfile. Creando uno en: ${repoDir}`);
+        lines.push(`No hay Dockerfile. Creando uno en: ${repoDir}`);
+        await writeFile(dockerfilePath, await dockerfileFor(repoDir), "utf8");
+      } else {
+        await note("Dockerfile encontrado");
+      }
 
       await note("Construyendo imagen...");
-      await execAsync(`docker build -t ${shellArg(imageTag)} .`, { cwd: workdir });
+      await execAsync(`docker build -t ${shellArg(imageTag)} .`, { cwd: repoDir });
 
       await note("Imagen construida. Estado: running");
       await store.update(projectId, { status: "running", image: imageTag });
@@ -71,9 +80,9 @@ const worker = new Worker<DeployJobData>(
       });
       throw error;
     } finally {
-      if (workdir) {
-        await rm(workdir, { recursive: true, force: true });
-        console.log(`Carpeta temporal eliminada: ${workdir}`);
+      if (cloned) {
+        await rm(repoDir, { recursive: true, force: true });
+        console.log(`Carpeta temporal eliminada: ${repoDir}`);
       }
     }
   },
@@ -86,11 +95,11 @@ worker.on("failed", (job, error) => {
 
 console.log(`Deploy worker listening with concurrency ${concurrency}`);
 
-function deploymentDir(projectId: string): string {
-  if (!/^[a-z0-9]+$/i.test(projectId)) {
-    throw new Error("projectId inválido para la carpeta temporal");
+function repoDirectory(jobId: string | undefined): string {
+  if (!jobId || !/^[a-z0-9_-]+$/i.test(jobId)) {
+    throw new Error("jobId inválido para la carpeta temporal");
   }
-  return path.join(os.tmpdir(), "deployments", projectId);
+  return path.resolve(os.tmpdir(), "deployments", jobId);
 }
 
 function dockerTag(image: string, projectName: string): string {
@@ -114,19 +123,10 @@ COPY . /usr/share/nginx/html
 EXPOSE 80
 `;
 
-async function ensureDockerfile(workdir: string): Promise<string> {
-  const dockerfile = path.join(workdir, "Dockerfile");
-  if (await fileExists(dockerfile)) {
-    return "Dockerfile encontrado";
-  }
-
-  const html = await fileExists(path.join(workdir, "index.html"));
-  const nodeApp = await fileExists(path.join(workdir, "package.json"));
-  const serveStatic = html && !nodeApp;
-  await writeFile(dockerfile, serveStatic ? STATIC_DOCKERFILE : NODE_DOCKERFILE, "utf8");
-  return serveStatic
-    ? "No hay Dockerfile. Creando uno para servir HTML estático..."
-    : "No hay Dockerfile. Creando uno básico de Node.js...";
+async function dockerfileFor(repoDir: string): Promise<string> {
+  const html = await fileExists(path.join(repoDir, "index.html"));
+  const nodeApp = await fileExists(path.join(repoDir, "package.json"));
+  return html && !nodeApp ? STATIC_DOCKERFILE : NODE_DOCKERFILE;
 }
 
 async function fileExists(file: string): Promise<boolean> {

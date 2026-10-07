@@ -8,11 +8,13 @@ export function AeroWindow({
   children,
   onClose,
   dialog = false,
+  wide = false,
 }: {
   title: string;
   children: React.ReactNode;
   onClose?: () => void;
   dialog?: boolean;
+  wide?: boolean;
 }) {
   const router = useRouter();
   const [minimized, setMinimized] = useState(false);
@@ -29,7 +31,9 @@ export function AeroWindow({
   const frame = maximized
     ? "fixed top-3 right-3 bottom-16 left-28 z-30"
     : dialog
-      ? "w-full max-w-md"
+      ? wide
+        ? "w-full max-w-3xl"
+        : "w-full max-w-md"
       : "mt-4 w-full max-w-4xl";
 
   return (

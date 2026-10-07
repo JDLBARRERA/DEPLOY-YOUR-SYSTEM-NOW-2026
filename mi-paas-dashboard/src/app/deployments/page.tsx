@@ -69,27 +69,29 @@ export default function DeploymentsPage() {
         ) : items.length === 0 ? (
           <p className="text-sm">Todavía no hay despliegues.</p>
         ) : (
-          <table className="w-full text-left text-sm">
+          <table className="w-full table-fixed text-left text-sm">
             <thead className="bg-white/50">
               <tr>
-                <th className="px-2 py-1 font-semibold">Proyecto</th>
+                <th className="w-[22%] px-2 py-1 font-semibold">Proyecto</th>
                 <th className="px-2 py-1 font-semibold">Repositorio</th>
-                <th className="px-2 py-1 font-semibold">Estado</th>
-                <th className="px-2 py-1 font-semibold">Creado</th>
-                <th className="px-2 py-1 font-semibold">Logs</th>
+                <th className="w-20 px-2 py-1 font-semibold">Estado</th>
+                <th className="w-28 px-2 py-1 font-semibold">Creado</th>
+                <th className="w-24 px-2 py-1 font-semibold">Logs</th>
               </tr>
             </thead>
             <tbody>
               {items.map((item) => (
                 <tr key={item.projectId} className="border-t border-white/50">
-                  <td className="px-2 py-1 font-medium">{item.projectName}</td>
-                  <td className="max-w-xs truncate px-2 py-1">{item.repoUrl}</td>
+                  <td className="truncate px-2 py-1 font-medium">{item.projectName}</td>
+                  <td className="truncate px-2 py-1" title={item.repoUrl}>
+                    {item.repoUrl}
+                  </td>
                   <td className="px-2 py-1">
                     <button type="button" onClick={() => setLogsFor(item)} className="cursor-pointer">
                       <StatusBadge status={item.status} />
                     </button>
                   </td>
-                  <td className="px-2 py-1">{formatDate(item.createdAt)}</td>
+                  <td className="truncate px-2 py-1">{formatDate(item.createdAt)}</td>
                   <td className="px-2 py-1">
                     <WinButton onClick={() => setLogsFor(item)}>Ver Logs</WinButton>
                   </td>
@@ -126,7 +128,7 @@ export default function DeploymentsPage() {
       ) : null}
       {logsFor ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-4">
-          <AeroWindow title="Build Logs" onClose={() => setLogsFor(null)}>
+          <AeroWindow title="Build Logs" dialog wide onClose={() => setLogsFor(null)}>
             <BuildLogs deployment={logsFor} />
           </AeroWindow>
         </div>
@@ -252,5 +254,11 @@ function isErrorLine(line: string): boolean {
 function formatDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  return date.toLocaleString("es", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
