@@ -75,7 +75,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
 
   return {
     deploymentType: deployment.type,
-    variables: deployment.project.env.map((variable) => ({
+    variables: deployment.project.env.map((variable: any) => ({
       key: variable.key,
       value: variable.value,
       environment: variable.environment,

@@ -34,11 +34,12 @@ const PORT_TTL_SECONDS = 60 * 60 * 24;
 const DEFAULT_DOCKERFILE = `FROM node:18-alpine
 WORKDIR /app
 COPY package*.json ./
-# Asegura instalar devDependencies para tener typescript/tsc
 ENV NODE_ENV=development
 RUN npm install
 COPY . .
-# Compila la aplicación. Si falla la compilación, docker build debe detenerse aquí.
+# Generar el cliente de Prisma antes de compilar
+RUN npx prisma generate
+# Compilar la aplicación
 RUN npm run build
 EXPOSE 8000
 CMD ["npm", "start"]

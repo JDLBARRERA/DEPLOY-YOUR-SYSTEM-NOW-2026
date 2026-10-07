@@ -143,9 +143,9 @@ export class GitHubWebhookService {
     const projects = await prisma.project.findMany({
       include: { database: true },
     });
-    const projectRepoUrls = projects.map((project) => project.repoUrl);
+    const projectRepoUrls = projects.map((project: any) => project.repoUrl);
     const repoKey = githubRepoKey(repoUrl);
-    const matches = projects.filter((project) => {
+    const matches = projects.filter((project: any) => {
       if (normalizeRepoUrl(project.repoUrl) === repoUrl) {
         return true;
       }
