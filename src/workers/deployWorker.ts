@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { execFile } from "node:child_process";
+import { exec } from "node:child_process";
 import { mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,7 +15,7 @@ import { DEPLOY_QUEUE_NAME, type DeployJobData } from "../queues/deployQueue.js"
 import { createRedis } from "../redis.js";
 import { syncDeployment } from "../services/syncDeployment.js";
 
-const execFileAsync = promisify(execFile);
+const execAsync = promisify(exec);
 const connection = createRedis();
 const store = new DeploymentStore(connection);
 const logs = new LogBus(connection);
@@ -45,11 +45,11 @@ const worker = new Worker<DeployJobData>(
       await rm(workdir, { recursive: true, force: true });
       await mkdir(path.dirname(workdir), { recursive: true });
 
-      await note(`Clonando repositorio ${repoUrl}...`);
-      await run("git", ["clone", repoUrl, workdir]);
+      await note("Clonando repositorio...");
+      await execAsync(`git clone ${shellArg(repoUrl)} ${shellArg(workdir)}`);
 
-      await note(`Construyendo imagen ${imageTag}...`);
-      await run("docker", ["build", "-t", imageTag, "."], workdir);
+      await note("Construyendo imagen...");
+      await execAsync(`docker build -t ${shellArg(imageTag)} .`, { cwd: workdir });
 
       await note("Imagen construida. Estado: running");
       await store.update(projectId, { status: "running", image: imageTag });
@@ -98,11 +98,11 @@ function dockerTag(image: string, projectName: string): string {
   return normalizeImageName(projectName);
 }
 
-async function run(command: string, args: string[], cwd?: string): Promise<void> {
-  await execFileAsync(command, args, {
-    cwd,
-    maxBuffer: 20 * 1024 * 1024,
-  });
+function shellArg(value: string): string {
+  if (/[\r\n"$`;&|<>]/.test(value)) {
+    throw new Error("argumento de comando no permitido");
+  }
+  return `"${value}"`;
 }
 
 function commandError(error: unknown): string {
