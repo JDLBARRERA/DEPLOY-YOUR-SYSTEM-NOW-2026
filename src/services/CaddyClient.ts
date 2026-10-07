@@ -2,7 +2,6 @@ const DEFAULT_ADMIN_URL = "http://localhost:2019";
 
 const CADDY_HEADERS = {
   Host: "localhost:2019",
-  Origin: "http://localhost:2019",
   "Content-Type": "application/json",
 } as const;
 
