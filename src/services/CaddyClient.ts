@@ -23,72 +23,58 @@ export class CaddyClient {
     };
     const body = JSON.stringify(route);
 
-    const replace = await this.adminRequest("PATCH", `/id/route-${projectId}`, body);
-    if (replace.statusCode >= 200 && replace.statusCode < 300) {
+    try {
+      await this.adminRequest("PATCH", `/id/route-${projectId}`, body);
       console.log(
         `Caddy: ruta actualizada para ${host} → host.docker.internal:${port}`,
       );
       return;
+    } catch (error) {
+      if (!isNotFound(error)) {
+        throw error;
+      }
     }
 
-    if (replace.statusCode !== 404) {
-      throw new Error(
-        `Caddy route update failed: ${replace.statusCode} ${replace.body}`,
-      );
-    }
-
-    const created = await this.adminRequest(
-      "POST",
-      "/config/apps/http/servers/paas/routes/0",
-      body,
-    );
-
-    if (created.statusCode < 200 || created.statusCode >= 300) {
-      throw new Error(
-        `Caddy route create failed: ${created.statusCode} ${created.body}`,
-      );
-    }
-
+    await this.adminRequest("POST", "/config/apps/http/servers/paas/routes/0", body);
     console.log(
       `Caddy: ruta creada para ${host} → host.docker.internal:${port}`,
     );
   }
 
-  private adminRequest(
-    method: string,
-    path: string,
-    body: string,
-  ): Promise<{ statusCode: number; body: string }> {
-    const headers: Record<string, string> = {
+  private adminRequest(method: string, requestPath: string, body: string): Promise<string> {
+    const headers: Record<string, string | number> = {
       Host: "localhost:2019",
       "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
     };
-    delete headers.Origin;
-    delete headers.origin;
+    delete headers["Origin"];
+    delete headers["origin"];
     console.log("Headers enviados a Caddy:", headers);
 
-    const url = new URL(path, this.adminUrl);
     return new Promise((resolve, reject) => {
       const request = http.request(
         {
-          protocol: url.protocol,
-          hostname: url.hostname,
-          port: url.port || 2019,
-          path: url.pathname + url.search,
+          hostname: "localhost",
+          port: 2019,
+          path: requestPath,
           method,
-          headers: {
-            ...headers,
-            "Content-Length": Buffer.byteLength(body),
-          },
+          headers,
         },
-        (response) => {
+        (res) => {
           const chunks: Buffer[] = [];
-          response.on("data", (chunk: Buffer) => chunks.push(chunk));
-          response.on("end", () => {
-            resolve({
-              statusCode: response.statusCode ?? 0,
-              body: Buffer.concat(chunks).toString("utf8"),
-            });
+          res.on("data", (chunk: Buffer) => {
+            chunks.push(chunk);
+          });
+          res.on("end", () => {
+            const responseBody = Buffer.concat(chunks).toString("utf8");
+            const statusCode = res.statusCode ?? 0;
+            if (statusCode >= 400) {
+              reject(
+                new Error(`Caddy request failed: ${statusCode} ${responseBody}`),
+              );
+              return;
+            }
+            resolve(responseBody);
           });
         },
       );
@@ -97,6 +83,10 @@ export class CaddyClient {
       request.end();
     });
   }
+}
+
+function isNotFound(error: unknown): boolean {
+  return error instanceof Error && /\b404\b/.test(error.message);
 }
 
 function normalizeAdminUrl(url: string): string {
