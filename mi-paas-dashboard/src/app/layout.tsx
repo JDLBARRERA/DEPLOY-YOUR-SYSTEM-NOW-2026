@@ -4,8 +4,8 @@ import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "mi-paas",
-  description: "Dashboard para controlar el motor PaaS.",
+  title: "deplowe-now.com | PaaS Dashboard",
+  description: "Dashboard PaaS de deplowe-now.com.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

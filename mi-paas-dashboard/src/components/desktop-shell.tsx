@@ -23,7 +23,7 @@ const titles: Record<string, string> = {
 export function DesktopShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [startOpen, setStartOpen] = useState(false);
-  const title = titles[pathname] ?? "mi-paas";
+  const title = titles[pathname] ?? "deplowe-now.com";
 
   return (
     <div className="relative min-h-svh overflow-hidden bg-[#041428] text-white">
@@ -33,20 +33,20 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
       <nav className="absolute top-4 left-3 z-20 flex w-24 flex-col items-center gap-4">
         <Link
           href="/"
-          aria-label="mi-paas"
-          className="flex flex-col items-center gap-1 rounded-md px-1 py-1 text-center text-xs text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]"
+          aria-label="deplowe-now.com"
+          className="flex flex-col items-center gap-1 rounded-md px-1 py-1 text-center text-[10px] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]"
         >
           <span className="relative flex size-14 items-center justify-center overflow-hidden rounded-2xl border border-white/55 bg-gradient-to-b from-white/55 via-sky-200/35 to-sky-900/40 p-1.5 shadow-[0_0_18px_rgba(90,210,255,0.55),inset_0_1px_0_rgba(255,255,255,0.85)] ring-1 ring-sky-200/40">
             <Image
               src="/logo.jpg"
-              alt="mi-paas"
+              alt="deplowe-now.com"
               width={48}
               height={48}
               className="size-11 rounded-xl object-cover"
               priority
             />
           </span>
-          <span className="leading-tight font-semibold">mi-paas</span>
+          <span className="leading-tight font-semibold break-all">deplowe-now</span>
         </Link>
 
         {icons.map((item) => {
@@ -94,7 +94,7 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
                 className="size-8 rounded-lg object-cover"
               />
             </span>
-            mi-paas
+            deplowe-now.com
           </div>
           <div className="flex flex-col p-2">
             {icons.map((item) => {
