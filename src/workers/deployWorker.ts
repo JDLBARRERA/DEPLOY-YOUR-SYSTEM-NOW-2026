@@ -1,10 +1,8 @@
 import "dotenv/config";
-import { exec, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import fs from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { Worker } from "bullmq";
 import { DeploymentStore } from "../services/DeploymentStore.js";
 import { LogBus } from "../services/LogBus.js";
@@ -16,11 +14,19 @@ import { DEPLOY_QUEUE_NAME, type DeployJobData } from "../queues/deployQueue.js"
 import { createRedis } from "../redis.js";
 import { syncDeployment } from "../services/syncDeployment.js";
 
-const execAsync = promisify(exec);
 const connection = createRedis();
 const store = new DeploymentStore(connection);
 const logs = new LogBus(connection);
 const concurrency = Number(process.env.DEPLOY_CONCURRENCY ?? 2);
+
+const DEFAULT_DOCKERFILE = `FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --production
+COPY . .
+EXPOSE 3000
+CMD ["npm", "start"]
+`;
 
 const worker = new Worker<DeployJobData>(
   DEPLOY_QUEUE_NAME,
@@ -43,22 +49,21 @@ const worker = new Worker<DeployJobData>(
 
     try {
       assertPublicGitHubRepo(repoUrl);
-      await rm(repoDir, { recursive: true, force: true });
-      await mkdir(path.dirname(repoDir), { recursive: true });
+
+      fs.rmSync(repoDir, { recursive: true, force: true });
+      fs.mkdirSync(repoDir, { recursive: true });
 
       await note("Clonando repositorio...");
-      await execAsync(`git clone ${shellArg(repoUrl)} ${shellArg(repoDir)}`);
+      execSync(`git clone "${repoUrl}" .`, { cwd: repoDir, stdio: "pipe" });
       cloned = true;
 
       console.log("Directorio del repo:", repoDir);
       const dockerfilePath = path.join(repoDir, "Dockerfile");
-      console.log("¿Existe Dockerfile?:", fs.existsSync(dockerfilePath));
-
       if (!fs.existsSync(dockerfilePath)) {
-        fs.writeFileSync(dockerfilePath, dockerfileFor(repoDir), "utf8");
-        console.log("Dockerfile autogenerado exitosamente en:", dockerfilePath);
-        await logs.append(projectId, `Dockerfile autogenerado exitosamente en: ${dockerfilePath}`);
-        lines.push(`Dockerfile autogenerado exitosamente en: ${dockerfilePath}`);
+        fs.writeFileSync(dockerfilePath, DEFAULT_DOCKERFILE);
+        console.log("Dockerfile autogenerado en:", dockerfilePath);
+        await logs.append(projectId, `Dockerfile autogenerado en: ${dockerfilePath}`);
+        lines.push(`Dockerfile autogenerado en: ${dockerfilePath}`);
       }
 
       await note("Construyendo imagen...");
@@ -83,7 +88,7 @@ const worker = new Worker<DeployJobData>(
       throw error;
     } finally {
       if (cloned) {
-        await rm(repoDir, { recursive: true, force: true });
+        fs.rmSync(repoDir, { recursive: true, force: true });
         console.log(`Carpeta temporal eliminada: ${repoDir}`);
       }
     }
@@ -109,33 +114,6 @@ function dockerTag(image: string, projectName: string): string {
     return image;
   }
   return normalizeImageName(projectName);
-}
-
-const NODE_DOCKERFILE = `FROM node:22-bookworm-slim
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-EXPOSE 3000
-CMD ["npm", "start"]
-`;
-
-const STATIC_DOCKERFILE = `FROM nginx:alpine
-COPY . /usr/share/nginx/html
-EXPOSE 80
-`;
-
-function dockerfileFor(repoDir: string): string {
-  const html = fs.existsSync(path.join(repoDir, "index.html"));
-  const nodeApp = fs.existsSync(path.join(repoDir, "package.json"));
-  return html && !nodeApp ? STATIC_DOCKERFILE : NODE_DOCKERFILE;
-}
-
-function shellArg(value: string): string {
-  if (/[\r\n"$`;&|<>]/.test(value)) {
-    throw new Error("argumento de comando no permitido");
-  }
-  return `"${value}"`;
 }
 
 function commandError(error: unknown): string {
