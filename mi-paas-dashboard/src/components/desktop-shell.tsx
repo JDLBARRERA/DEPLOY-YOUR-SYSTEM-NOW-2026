@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -29,7 +30,25 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_20%_0%,#b8ffd9_0%,transparent_42%),radial-gradient(ellipse_at_70%_20%,#3ee0ff_0%,transparent_36%),radial-gradient(ellipse_at_40%_80%,#1a5cff_0%,transparent_45%),radial-gradient(ellipse_at_90%_90%,#06204a_0%,#020814_70%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(160deg,transparent_0%,rgba(0,40,80,0.25)_45%,rgba(0,0,0,0.35)_100%)]" />
 
-      <nav className="absolute top-4 left-3 z-20 flex w-24 flex-col gap-4">
+      <nav className="absolute top-4 left-3 z-20 flex w-24 flex-col items-center gap-4">
+        <Link
+          href="/"
+          aria-label="mi-paas"
+          className="flex flex-col items-center gap-1 rounded-md px-1 py-1 text-center text-xs text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]"
+        >
+          <span className="relative flex size-14 items-center justify-center overflow-hidden rounded-2xl border border-white/55 bg-gradient-to-b from-white/55 via-sky-200/35 to-sky-900/40 p-1.5 shadow-[0_0_18px_rgba(90,210,255,0.55),inset_0_1px_0_rgba(255,255,255,0.85)] ring-1 ring-sky-200/40">
+            <Image
+              src="/logo.jpg"
+              alt="mi-paas"
+              width={48}
+              height={48}
+              className="size-11 rounded-xl object-cover"
+              priority
+            />
+          </span>
+          <span className="leading-tight font-semibold">mi-paas</span>
+        </Link>
+
         {icons.map((item) => {
           const Icon = item.icon;
           const active = pathname === item.href;
@@ -65,7 +84,16 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
 
       {startOpen ? (
         <div className="fixed bottom-16 left-3 z-40 w-72 overflow-hidden rounded-xl border border-white/40 bg-black/30 shadow-2xl backdrop-blur-xl">
-          <div className="bg-gradient-to-r from-white/30 to-transparent px-4 py-3 text-sm font-semibold">
+          <div className="flex items-center gap-3 bg-gradient-to-r from-white/30 to-transparent px-4 py-3 text-sm font-semibold">
+            <span className="relative flex size-9 items-center justify-center overflow-hidden rounded-xl border border-white/50 bg-white/20 shadow-[0_0_12px_rgba(90,210,255,0.45)]">
+              <Image
+                src="/logo.jpg"
+                alt=""
+                width={32}
+                height={32}
+                className="size-8 rounded-lg object-cover"
+              />
+            </span>
             mi-paas
           </div>
           <div className="flex flex-col p-2">
@@ -92,14 +120,15 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
           type="button"
           aria-label="Inicio"
           onClick={() => setStartOpen((open) => !open)}
-          className="relative -mt-4 size-14 shrink-0 rounded-full border-2 border-white/60 bg-gradient-to-b from-sky-200 via-blue-500 to-blue-950 shadow-[0_6px_16px_rgba(0,0,0,0.45),inset_0_2px_4px_rgba(255,255,255,0.8)]"
+          className="relative -mt-4 flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-white/60 bg-gradient-to-b from-sky-200 via-blue-500 to-blue-950 p-1 shadow-[0_6px_16px_rgba(0,0,0,0.45),0_0_18px_rgba(80,200,255,0.45),inset_0_2px_4px_rgba(255,255,255,0.8)]"
         >
-          <span className="absolute inset-0 m-auto grid size-6 grid-cols-2 gap-0.5">
-            <span className="rounded-[2px] bg-red-500" />
-            <span className="rounded-[2px] bg-lime-400" />
-            <span className="rounded-[2px] bg-sky-400" />
-            <span className="rounded-[2px] bg-amber-300" />
-          </span>
+          <Image
+            src="/logo.jpg"
+            alt=""
+            width={44}
+            height={44}
+            className="size-11 rounded-full object-cover"
+          />
         </button>
         <Link
           href={pathname}

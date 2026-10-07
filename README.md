@@ -1,8 +1,8 @@
 # Deploy your system 2026
 
-Motor PaaS propio. Clona un repositorio público de GitHub, lo construye con Nixpacks, lo corre en Docker y lo publica con Caddy. Postgres guarda usuarios, proyectos, despliegues y bases. Redis guarda la cola y los logs en vivo.
+Motor PaaS propio. Clona un repositorio público de GitHub, lo construye (Docker/Nixpacks), lo corre en contenedor y lo publica con Caddy. Postgres guarda proyectos, despliegues y bases. Redis guarda la cola y los logs en vivo.
 
-El remoto es `https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git`, rama `main`. El motor que ya está en GitHub incluye el panel local, los webhooks y los archivos de producción. El panel remoto `mi-paas-dashboard` está en esta carpeta y todavía no forma parte de un commit.
+El remoto es `https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git`, rama `main`.
 
 La guía de lo que quedó corriendo en el Droplet está en [SETUP.md](SETUP.md).
 
@@ -10,36 +10,29 @@ La guía de lo que quedó corriendo en el Droplet está en [SETUP.md](SETUP.md).
 
 ```text
 .
-├── src/                         API Fastify (no hay apps/api)
+├── src/                         API Fastify
 │   ├── index.ts                 Arranque, CORS y rutas
 │   ├── routes/                  /deploy, /deployments, /databases, /webhooks/github
 │   ├── services/                Motor, Caddy, bases, webhooks, logs, dominio
 │   ├── workers/deployWorker.ts  Consumidor de la cola
 │   └── queues/                  Cola BullMQ "deploys"
-├── apps/dashboard/              Panel local con Auth.js, puerto 3001
-├── mi-paas-dashboard/           Panel remoto, puerto 3000, sin login
-├── prisma/                      Esquema y migraciones compartidos
-├── infra/                       Compose local, compose de producción, Caddy, PgBouncer
+├── mi-paas-dashboard/           Única UI (Frutiger Aero), Next.js
+├── prisma/                      Esquema y migraciones
+├── infra/                       Compose, Caddy, PgBouncer
 └── docker-compose.yml           Postgres, PgBouncer, Redis y Caddy en local
 ```
-
-El panel local y la API usan el cliente Prisma generado desde `prisma/schema.prisma`. Ese cliente no se sube a git.
 
 ```text
 Esta máquina
    │
-   ├─ apps/dashboard :3001
-   │     Auth.js, equipos, variables por ámbito, métricas
-   │     habla con la API local :3000
-   │
-   ├─ mi-paas-dashboard :3000
+   ├─ mi-paas-dashboard :3000 (o :3010 si la API usa :3000)
    │     Overview, Deployments, Databases, Settings
    │     el navegador llama a /backend
-   │     Next reescribe /backend hacia el Droplet
+   │     Next reescribe /backend hacia API_URL (local o Droplet)
    │
-   └─ API local :3000
+   └─ API :3000
          Redis (cola + logs SSE)
-         Worker → git clone → nixpacks → Docker
+         Worker → git clone → docker build → Docker
          Caddy → {nombre}.localhost
          Postgres :5432 y PgBouncer :6543
 
@@ -49,27 +42,28 @@ Droplet 46.101.84.190
    El detalle de ese arranque está en SETUP.md
 ```
 
-Hay dos paneles a propósito. `apps/dashboard` es el control plane de esta máquina, con sesión. `mi-paas-dashboard` opera el motor que ya responde en el Droplet y no pide login, porque esos endpoints públicos tampoco la piden.
+La única interfaz gráfica es `mi-paas-dashboard`.
 
 ## Qué ya funciona
 
 | Área | Estado |
 | --- | --- |
-| Clonar un repo público, construir con Nixpacks y levantar el contenedor | Hecho |
+| Clonar un repo público, construir y levantar el contenedor | Hecho |
 | Cola BullMQ, logs en vivo y CPU/RAM por SSE | Hecho |
 | Caddy en `{proyecto}.localhost` en local | Hecho |
-| Panel local con login, registro y GitHub OAuth | Hecho |
-| Primer usuario admin, con equipo personal. Sesión de 30 días | Hecho |
+| Deploy con `branch`, `commitHash` y `clearCache` | Hecho |
+| Redeploy desde el panel | Hecho |
 | Producción si el push es la rama del proyecto; el resto y los PR son preview | Hecho |
 | Variables `ALL`, `PRODUCTION` y `PREVIEW` | Hecho |
 | Base por proyecto, pool, URL directa y branch con `TEMPLATE` | Hecho |
 | Compose de producción, Caddy con TLS y `infra/setup-ubuntu.sh` | Escrito en el repo |
 | Motor alcanzable en `http://46.101.84.190` | Hecho |
-| Panel remoto contra ese motor | Hecho |
+| Panel Aero contra ese motor | Hecho |
 
 ### API
 
-- `POST /deploy` encola `{ repoUrl, projectName, deploymentId? }` y responde `202`.
+- `POST /deploy` encola `{ repoUrl, projectName, branch?, commitHash?, clearCache?, deploymentId? }` y responde `202`.
+- `POST /deployments/:id/redeploy` copia la versión y la vuelve a encolar.
 - `GET /deployments` devuelve `{ projectId, projectName, repoUrl, image, port, status, host, url, createdAt }`. Estados: `queued`, `building`, `running`, `failed`.
 - `GET /deployments/:projectId/logs` y `GET /deployments/:projectId/stats` abren SSE.
 - `GET /databases` devuelve `{ id, name, dbName, pooledUrl, directUrl, host, port, projectId, createdAt }`.
@@ -78,26 +72,18 @@ Hay dos paneles a propósito. `apps/dashboard` es el control plane de esta máqu
 
 En local el host es `{nombre}.localhost` y la URL es `http`. Con `APP_DOMAIN` distinto de `localhost`, la URL pasa a `https://{nombre}.{APP_DOMAIN}`.
 
-### Panel local (`apps/dashboard`)
+### Panel (`mi-paas-dashboard`)
 
-- `/login` y `/register`. Quien ya tiene sesión vuelve a `/`.
-- Un invitado que entra a `/`, `/dashboard`, `/projects`, `/databases` o `/deployments` va a `/login`.
-- Despliegues con badge Production/Preview, autor y medidores de CPU y RAM.
-- Bases: crear, copiar las dos URLs, crear branch y vincular a un proyecto.
-- Variables de entorno por ámbito en cada proyecto.
-
-### Panel remoto (`mi-paas-dashboard`)
-
-Corre en `http://localhost:3000`. El navegador no llama a la IP. `next.config.mjs` reescribe `/backend/*` hacia `API_URL` (`http://46.101.84.190` en `.env.local`).
+Corre en `http://localhost:3000` (o `3010` si la API ya ocupa el 3000). El navegador no llama a la IP directamente: `next.config.mjs` reescribe `/backend/*` hacia `API_URL`.
 
 - Overview: total de despliegues, cuántos están `running`, total de bases y si el API respondió.
-- Deployments: tabla y diálogo con `repoUrl` y `projectName`.
+- Deployments: tabla con Ver Logs / Redeploy; diálogo con `repoUrl`, `projectName`, `branch` y `clearCache`.
 - Databases: tarjetas y copia de `pooledUrl`. El diálogo pide `name` y un `projectId` opcional.
 - Settings: muestra `/backend` y el valor de `API_URL`.
 
 ### Datos
 
-Postgres del control plane guarda `User`, `Team`, `Project`, `Deployment`, `EnvVar`, `DatabaseInstance` y `ApiKey`, más las tablas de Auth.js. La contraseña de cada base de proyecto se guarda cifrada. Redis solo guarda la cola y los logs.
+Postgres del control plane guarda `User`, `Team`, `Project`, `Deployment`, `EnvVar`, `DatabaseInstance` y `ApiKey`. La contraseña de cada base de proyecto se guarda cifrada. Redis solo guarda la cola y los logs.
 
 La API local usa PgBouncer:
 
@@ -116,15 +102,7 @@ npm run dev
 npm run worker
 ```
 
-Panel local, en otra terminal:
-
-```powershell
-cd apps/dashboard
-npm install
-npm run dev -- --port 3001
-```
-
-Panel remoto, en otra terminal:
+Panel, en otra terminal:
 
 ```powershell
 cd mi-paas-dashboard
@@ -132,12 +110,11 @@ npm install
 npm run dev -- --port 3000
 ```
 
-`apps/dashboard/.env.local` lleva `DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL=http://localhost:3001`, `NEXT_PUBLIC_API_URL=http://localhost:3000` y las claves `AUTH_GITHUB_ID` y `AUTH_GITHUB_SECRET`. `mi-paas-dashboard/.env.local` solo lleva `API_URL`. Ninguno de esos archivos se sube a git.
+`mi-paas-dashboard/.env.local` lleva `API_URL` (Droplet o `http://localhost:3000`). Ese archivo no se sube a git.
 
 | Servicio | Dirección |
 | --- | --- |
-| Panel remoto | http://localhost:3000 |
-| Panel local | http://localhost:3001 |
+| Panel | http://localhost:3000 |
 | API local | http://localhost:3000 |
 | API del Droplet | http://46.101.84.190 |
 | Postgres | 127.0.0.1:5432 |
@@ -147,7 +124,7 @@ npm run dev -- --port 3000
 
 Un sitio desplegado en local responde en `http://{nombre}.localhost`.
 
-Si el panel remoto y la API local se arrancan a la vez, los dos quieren el puerto 3000. Para usar los dos, el panel remoto puede ir en otro puerto: `npm run dev -- --port 3010`. El rewrite sigue saliendo hacia el Droplet.
+Si el panel y la API local se arrancan a la vez, los dos quieren el puerto 3000. En ese caso el panel puede ir en otro puerto: `npm run dev -- --port 3010`.
 
 ## Qué sigue
 

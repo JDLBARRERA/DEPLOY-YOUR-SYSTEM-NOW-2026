@@ -241,7 +241,7 @@ function sseHeaders(): Record<string, string> {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
-    "Access-Control-Allow-Origin": process.env.CORS_ORIGIN ?? "http://localhost:3001",
+    "Access-Control-Allow-Origin": process.env.CORS_ORIGIN ?? "http://localhost:3000",
   };
 }
 

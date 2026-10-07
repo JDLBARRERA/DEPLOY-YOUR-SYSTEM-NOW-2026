@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { AeroWindow, WinButton, WinField } from "@/components/aero-window";
 import { StatusBadge } from "@/components/status-badge";
@@ -10,6 +11,7 @@ export default function DeploymentsPage() {
   const [items, setItems] = useState<Deployment[] | null>(null);
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
+  const [redeployingId, setRedeployingId] = useState<string | null>(null);
   const [logsFor, setLogsFor] = useState<Deployment | null>(null);
 
   const load = useCallback(async () => {
@@ -39,11 +41,15 @@ export default function DeploymentsPage() {
     const form = new FormData(formElement);
     setPending(true);
     try {
+      const branch = String(form.get("branch") ?? "main").trim() || "main";
+      const clearCache = form.get("clearCache") === "on";
       await apiFetch("/deploy", {
         method: "POST",
         body: JSON.stringify({
           repoUrl: String(form.get("repoUrl") ?? ""),
           projectName: String(form.get("projectName") ?? ""),
+          branch,
+          clearCache,
         }),
       });
       formElement.reset();
@@ -54,6 +60,33 @@ export default function DeploymentsPage() {
       toast.error(error instanceof Error ? error.message : "No se pudo crear el despliegue");
     } finally {
       setPending(false);
+    }
+  }
+
+  async function onRedeploy(item: Deployment) {
+    setRedeployingId(item.projectId);
+    try {
+      try {
+        await apiFetch(`/deployments/${item.projectId}/redeploy`, {
+          method: "POST",
+        });
+      } catch {
+        // La tabla lista projectId de Redis; si no hay fila Prisma, re-encola /deploy.
+        await apiFetch("/deploy", {
+          method: "POST",
+          body: JSON.stringify({
+            repoUrl: item.repoUrl,
+            projectName: item.projectName,
+            branch: "main",
+          }),
+        });
+      }
+      toast.success("Nuevo despliegue puesto en cola");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo redesplegar");
+    } finally {
+      setRedeployingId(null);
     }
   }
 
@@ -72,11 +105,11 @@ export default function DeploymentsPage() {
           <table className="w-full table-fixed text-left text-sm">
             <thead className="bg-white/50">
               <tr>
-                <th className="w-[22%] px-2 py-1 font-semibold">Proyecto</th>
+                <th className="w-[20%] px-2 py-1 font-semibold">Proyecto</th>
                 <th className="px-2 py-1 font-semibold">Repositorio</th>
                 <th className="w-20 px-2 py-1 font-semibold">Estado</th>
                 <th className="w-28 px-2 py-1 font-semibold">Creado</th>
-                <th className="w-24 px-2 py-1 font-semibold">Logs</th>
+                <th className="w-44 px-2 py-1 font-semibold">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -93,7 +126,21 @@ export default function DeploymentsPage() {
                   </td>
                   <td className="truncate px-2 py-1">{formatDate(item.createdAt)}</td>
                   <td className="px-2 py-1">
-                    <WinButton onClick={() => setLogsFor(item)}>Ver Logs</WinButton>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <WinButton onClick={() => setLogsFor(item)}>Ver Logs</WinButton>
+                      <WinButton
+                        disabled={redeployingId === item.projectId}
+                        onClick={() => void onRedeploy(item)}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          <RefreshCw
+                            className={`size-3.5 ${redeployingId === item.projectId ? "animate-spin" : ""}`}
+                            aria-hidden
+                          />
+                          Redeploy
+                        </span>
+                      </WinButton>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -115,7 +162,36 @@ export default function DeploymentsPage() {
                 required
                 placeholder="https://github.com/org/repo"
               />
-              <WinField id="projectName" name="projectName" label="projectName" required placeholder="mi-app" />
+              <WinField
+                id="projectName"
+                name="projectName"
+                label="projectName"
+                required
+                placeholder="mi-app"
+              />
+              <WinField
+                id="branch"
+                name="branch"
+                label="Branch / Rama"
+                required
+                defaultValue="main"
+                placeholder="main"
+              />
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-white/70 bg-white/60 px-2.5 py-2 text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                <input
+                  type="checkbox"
+                  name="clearCache"
+                  className="mt-0.5 size-4 accent-sky-700"
+                />
+                <span>
+                  <span className="block font-medium">
+                    Limpiar caché de construcción
+                  </span>
+                  <span className="block text-xs text-slate-600">
+                    Envía clearCache al motor (docker build --no-cache).
+                  </span>
+                </span>
+              </label>
               <div className="flex justify-end gap-2">
                 <WinButton onClick={() => setOpen(false)}>Cancelar</WinButton>
                 <WinButton type="submit" disabled={pending}>

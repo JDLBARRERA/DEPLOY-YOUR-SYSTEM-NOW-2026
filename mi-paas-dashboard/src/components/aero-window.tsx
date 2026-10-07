@@ -122,12 +122,14 @@ export function WinField({
   name,
   required,
   placeholder,
+  defaultValue,
 }: {
   id: string;
   label: string;
   name: string;
   required?: boolean;
   placeholder?: string;
+  defaultValue?: string;
 }) {
   return (
     <label htmlFor={id} className="flex flex-col gap-1 text-sm">
@@ -137,6 +139,7 @@ export function WinField({
         name={name}
         required={required}
         placeholder={placeholder}
+        defaultValue={defaultValue}
         className="rounded-md border border-white/70 bg-white/80 px-2 py-1.5 text-slate-900 shadow-[inset_0_1px_3px_rgba(0,0,0,0.15)] outline-none"
       />
     </label>
