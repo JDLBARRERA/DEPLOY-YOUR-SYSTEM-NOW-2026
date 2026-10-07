@@ -1,6 +1,7 @@
 import "dotenv/config";
-import { exec } from "node:child_process";
-import { access, mkdir, rm, writeFile } from "node:fs/promises";
+import { exec, execSync } from "node:child_process";
+import fs from "node:fs";
+import { mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -25,7 +26,7 @@ const worker = new Worker<DeployJobData>(
   DEPLOY_QUEUE_NAME,
   async (job) => {
     const { projectId, repoUrl, projectName, deploymentId } = job.data;
-    const imageTag = dockerTag(job.data.image, projectName);
+    const appName = dockerTag(job.data.image, projectName);
     const lines: string[] = [];
     const repoDir = repoDirectory(job.id);
     let cloned = false;
@@ -38,7 +39,7 @@ const worker = new Worker<DeployJobData>(
 
     await store.update(projectId, { status: "building" });
     await syncDeployment(deploymentId, { status: "building" });
-    await note(`Construyendo ${imageTag}. Estado: building`);
+    await note(`Construyendo ${appName}. Estado: building`);
 
     try {
       assertPublicGitHubRepo(repoUrl);
@@ -49,21 +50,22 @@ const worker = new Worker<DeployJobData>(
       await execAsync(`git clone ${shellArg(repoUrl)} ${shellArg(repoDir)}`);
       cloned = true;
 
+      console.log("Directorio del repo:", repoDir);
       const dockerfilePath = path.join(repoDir, "Dockerfile");
-      if (!(await fileExists(dockerfilePath))) {
-        console.log("No hay Dockerfile. Creando uno en:", repoDir);
-        await logs.append(projectId, `No hay Dockerfile. Creando uno en: ${repoDir}`);
-        lines.push(`No hay Dockerfile. Creando uno en: ${repoDir}`);
-        await writeFile(dockerfilePath, await dockerfileFor(repoDir), "utf8");
-      } else {
-        await note("Dockerfile encontrado");
+      console.log("¿Existe Dockerfile?:", fs.existsSync(dockerfilePath));
+
+      if (!fs.existsSync(dockerfilePath)) {
+        fs.writeFileSync(dockerfilePath, dockerfileFor(repoDir), "utf8");
+        console.log("Dockerfile autogenerado exitosamente en:", dockerfilePath);
+        await logs.append(projectId, `Dockerfile autogenerado exitosamente en: ${dockerfilePath}`);
+        lines.push(`Dockerfile autogenerado exitosamente en: ${dockerfilePath}`);
       }
 
       await note("Construyendo imagen...");
-      await execAsync(`docker build -t ${shellArg(imageTag)} .`, { cwd: repoDir });
+      execSync(`docker build -t "${appName}" .`, { cwd: repoDir, stdio: "pipe" });
 
       await note("Imagen construida. Estado: running");
-      await store.update(projectId, { status: "running", image: imageTag });
+      await store.update(projectId, { status: "running", image: appName });
       await syncDeployment(deploymentId, {
         status: "running",
         buildLogs: lines.join("\n"),
@@ -123,19 +125,10 @@ COPY . /usr/share/nginx/html
 EXPOSE 80
 `;
 
-async function dockerfileFor(repoDir: string): Promise<string> {
-  const html = await fileExists(path.join(repoDir, "index.html"));
-  const nodeApp = await fileExists(path.join(repoDir, "package.json"));
+function dockerfileFor(repoDir: string): string {
+  const html = fs.existsSync(path.join(repoDir, "index.html"));
+  const nodeApp = fs.existsSync(path.join(repoDir, "package.json"));
   return html && !nodeApp ? STATIC_DOCKERFILE : NODE_DOCKERFILE;
-}
-
-async function fileExists(file: string): Promise<boolean> {
-  try {
-    await access(file);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function shellArg(value: string): string {
@@ -147,9 +140,17 @@ function shellArg(value: string): string {
 
 function commandError(error: unknown): string {
   const message = error instanceof Error ? error.message : "Deploy failed";
-  if (error && typeof error === "object" && "stderr" in error) {
-    const stderr = String((error as { stderr?: string }).stderr ?? "").trim();
-    return stderr ? `${message}\n${stderr}` : message;
+  if (error && typeof error === "object") {
+    const stderr =
+      "stderr" in error
+        ? String((error as { stderr?: Buffer | string }).stderr ?? "").trim()
+        : "";
+    const stdout =
+      "stdout" in error
+        ? String((error as { stdout?: Buffer | string }).stdout ?? "").trim()
+        : "";
+    const detail = [stderr, stdout].filter(Boolean).join("\n");
+    return detail ? `${message}\n${detail}` : message;
   }
   return message;
 }
