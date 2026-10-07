@@ -108,8 +108,17 @@ const worker = new Worker<DeployJobData>(
         .toString()
         .trim();
 
-      await caddy.upsertRoute(projectId, host, puertoLibre);
-      await note(`Contenedor levantado y enrutado en el puerto ${puertoLibre}.`);
+      let routed = false;
+      try {
+        await caddy.upsertRoute(projectId, host, puertoLibre);
+        routed = true;
+        await note(`Contenedor levantado y enrutado en el puerto ${puertoLibre}.`);
+      } catch (caddyError) {
+        const caddyMessage = commandError(caddyError);
+        await note(
+          `Contenedor levantado en el puerto ${puertoLibre}, pero el enrutamiento de Caddy falló: ${caddyMessage}`,
+        );
+      }
 
       await store.update(projectId, {
         status: "running",
@@ -124,6 +133,11 @@ const worker = new Worker<DeployJobData>(
         containerId,
         buildLogs: lines.join("\n"),
       });
+      if (!routed) {
+        console.warn(
+          `Deploy ${projectId}: contenedor ${containerId} en :${puertoLibre} sin ruta Caddy`,
+        );
+      }
       reservedPort = null;
     } catch (error) {
       if (reservedPort !== null) {
