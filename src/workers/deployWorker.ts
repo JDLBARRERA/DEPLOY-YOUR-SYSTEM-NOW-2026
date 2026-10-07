@@ -1,10 +1,11 @@
 import "dotenv/config";
-import { execSync } from "node:child_process";
+import { exec, execSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { Redis } from "ioredis";
 import { Worker } from "bullmq";
 import { appHost, appPublicUrl } from "../services/appHost.js";
@@ -19,6 +20,7 @@ import { DEPLOY_QUEUE_NAME, type DeployJobData } from "../queues/deployQueue.js"
 import { createRedis } from "../redis.js";
 import { syncDeployment } from "../services/syncDeployment.js";
 
+const execAsync = promisify(exec);
 const connection = createRedis();
 const store = new DeploymentStore(connection);
 const logs = new LogBus(connection);
@@ -32,9 +34,12 @@ const PORT_TTL_SECONDS = 60 * 60 * 24;
 const DEFAULT_DOCKERFILE = `FROM node:18-alpine
 WORKDIR /app
 COPY package*.json ./
+# Asegura instalar devDependencies para tener typescript/tsc
+ENV NODE_ENV=development
 RUN npm install
 COPY . .
-RUN npm run build || true
+# Compila la aplicación. Si falla la compilación, docker build debe detenerse aquí.
+RUN npm run build
 EXPOSE 8000
 CMD ["npm", "start"]
 `;
@@ -80,7 +85,17 @@ const worker = new Worker<DeployJobData>(
       }
 
       await note("Construyendo imagen...");
-      execSync(`docker build -t "${appName}" .`, { cwd: repoDir, stdio: "pipe" });
+      try {
+        execSync(`docker build -t "${appName}" .`, {
+          cwd: repoDir,
+          stdio: "pipe",
+          encoding: "utf8",
+        });
+      } catch (buildError) {
+        const detail = commandError(buildError);
+        await note(`docker build falló (incluye npm run build):\n${detail}`);
+        throw buildError;
+      }
 
       try {
         execSync(`docker stop "${containerName}"`, { stdio: "pipe" });
@@ -103,6 +118,22 @@ const worker = new Worker<DeployJobData>(
       reservedPort = puertoLibre;
       const host = appHost(appName);
       const deployNetwork = resolveDeployNetwork();
+
+      try {
+        await execAsync("docker network create mi-paas_default");
+      } catch {
+        // La red ya existe, ignorar
+      }
+      if (deployNetwork !== "mi-paas_default") {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(deployNetwork)) {
+          throw new Error(`Nombre de red Docker inválido: ${deployNetwork}`);
+        }
+        try {
+          await execAsync(`docker network create "${deployNetwork}"`);
+        } catch {
+          // La red ya existe, ignorar
+        }
+      }
 
       await note(
         `Levantando contenedor en el puerto ${puertoLibre} (red ${deployNetwork})...`,
