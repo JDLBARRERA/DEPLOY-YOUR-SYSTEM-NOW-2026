@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { exec } from "node:child_process";
-import { mkdir, rm } from "node:fs/promises";
+import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -47,6 +47,8 @@ const worker = new Worker<DeployJobData>(
 
       await note("Clonando repositorio...");
       await execAsync(`git clone ${shellArg(repoUrl)} ${shellArg(workdir)}`);
+
+      await note(await ensureDockerfile(workdir));
 
       await note("Construyendo imagen...");
       await execAsync(`docker build -t ${shellArg(imageTag)} .`, { cwd: workdir });
@@ -96,6 +98,44 @@ function dockerTag(image: string, projectName: string): string {
     return image;
   }
   return normalizeImageName(projectName);
+}
+
+const NODE_DOCKERFILE = `FROM node:22-bookworm-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm", "start"]
+`;
+
+const STATIC_DOCKERFILE = `FROM nginx:alpine
+COPY . /usr/share/nginx/html
+EXPOSE 80
+`;
+
+async function ensureDockerfile(workdir: string): Promise<string> {
+  const dockerfile = path.join(workdir, "Dockerfile");
+  if (await fileExists(dockerfile)) {
+    return "Dockerfile encontrado";
+  }
+
+  const html = await fileExists(path.join(workdir, "index.html"));
+  const nodeApp = await fileExists(path.join(workdir, "package.json"));
+  const serveStatic = html && !nodeApp;
+  await writeFile(dockerfile, serveStatic ? STATIC_DOCKERFILE : NODE_DOCKERFILE, "utf8");
+  return serveStatic
+    ? "No hay Dockerfile. Creando uno para servir HTML estático..."
+    : "No hay Dockerfile. Creando uno básico de Node.js...";
+}
+
+async function fileExists(file: string): Promise<boolean> {
+  try {
+    await access(file);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function shellArg(value: string): string {
