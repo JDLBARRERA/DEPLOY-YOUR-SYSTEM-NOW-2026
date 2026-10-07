@@ -4,8 +4,12 @@ import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "deplowe-now.com | PaaS Dashboard",
-  description: "Dashboard PaaS de deplowe-now.com.",
+  title: "deplowe-now.com | Control Plane",
+  description: "Control plane PaaS de deplowe-now.com.",
+  icons: {
+    icon: [{ url: "/logo-deplowe-now.jpg", type: "image/jpeg" }],
+    apple: [{ url: "/logo-deplowe-now.jpg", type: "image/jpeg" }],
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

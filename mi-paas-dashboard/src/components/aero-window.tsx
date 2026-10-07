@@ -98,18 +98,24 @@ export function WinButton({
   type = "button",
   disabled,
   onClick,
+  compact = false,
 }: {
   children: React.ReactNode;
   type?: "button" | "submit";
   disabled?: boolean;
   onClick?: () => void;
+  compact?: boolean;
 }) {
   return (
     <button
       type={type}
       disabled={disabled}
       onClick={onClick}
-      className="rounded-md border border-white/70 bg-gradient-to-b from-white to-sky-200 px-3 py-1.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_1px_2px_rgba(0,0,0,0.25)] hover:from-white hover:to-sky-100 disabled:opacity-60"
+      className={
+        compact
+          ? "inline-flex items-center gap-1 rounded-md border border-white/70 bg-gradient-to-b from-white to-sky-200 px-2 py-1 text-xs whitespace-nowrap text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_1px_2px_rgba(0,0,0,0.25)] hover:from-white hover:to-sky-100 disabled:opacity-60"
+          : "rounded-md border border-white/70 bg-gradient-to-b from-white to-sky-200 px-3 py-1.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_1px_2px_rgba(0,0,0,0.25)] hover:from-white hover:to-sky-100 disabled:opacity-60"
+      }
     >
       {children}
     </button>

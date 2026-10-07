@@ -64,6 +64,7 @@ export default function DeploymentsPage() {
   }
 
   async function onRedeploy(item: Deployment) {
+    if (redeployingId) return;
     setRedeployingId(item.projectId);
     try {
       try {
@@ -81,8 +82,12 @@ export default function DeploymentsPage() {
           }),
         });
       }
-      toast.success("Nuevo despliegue puesto en cola");
+      toast.success("Nuevo despliegue en cola");
       await load();
+      // Refresco corto para ver el estado pasar a building/running.
+      window.setTimeout(() => {
+        void load().catch(() => undefined);
+      }, 1500);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo redesplegar");
     } finally {
@@ -102,50 +107,70 @@ export default function DeploymentsPage() {
         ) : items.length === 0 ? (
           <p className="text-sm">Todavía no hay despliegues.</p>
         ) : (
-          <table className="w-full table-fixed text-left text-sm">
-            <thead className="bg-white/50">
-              <tr>
-                <th className="w-[20%] px-2 py-1 font-semibold">Proyecto</th>
-                <th className="px-2 py-1 font-semibold">Repositorio</th>
-                <th className="w-20 px-2 py-1 font-semibold">Estado</th>
-                <th className="w-28 px-2 py-1 font-semibold">Creado</th>
-                <th className="w-44 px-2 py-1 font-semibold">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => (
-                <tr key={item.projectId} className="border-t border-white/50">
-                  <td className="truncate px-2 py-1 font-medium">{item.projectName}</td>
-                  <td className="truncate px-2 py-1" title={item.repoUrl}>
-                    {item.repoUrl}
-                  </td>
-                  <td className="px-2 py-1">
-                    <button type="button" onClick={() => setLogsFor(item)} className="cursor-pointer">
-                      <StatusBadge status={item.status} />
-                    </button>
-                  </td>
-                  <td className="truncate px-2 py-1">{formatDate(item.createdAt)}</td>
-                  <td className="px-2 py-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <WinButton onClick={() => setLogsFor(item)}>Ver Logs</WinButton>
-                      <WinButton
-                        disabled={redeployingId === item.projectId}
-                        onClick={() => void onRedeploy(item)}
-                      >
-                        <span className="inline-flex items-center gap-1">
-                          <RefreshCw
-                            className={`size-3.5 ${redeployingId === item.projectId ? "animate-spin" : ""}`}
-                            aria-hidden
-                          />
-                          Redeploy
-                        </span>
-                      </WinButton>
-                    </div>
-                  </td>
+          <div className="overflow-x-auto rounded-md border border-white/50 bg-white/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead className="bg-gradient-to-b from-white/70 to-sky-100/50">
+                <tr>
+                  <th className="px-2.5 py-1.5 font-semibold">Proyecto</th>
+                  <th className="px-2.5 py-1.5 font-semibold">Repositorio</th>
+                  <th className="w-24 px-2.5 py-1.5 font-semibold">Estado</th>
+                  <th className="min-w-[180px] whitespace-nowrap px-2.5 py-1.5 font-semibold">
+                    Creado
+                  </th>
+                  <th className="min-w-[200px] whitespace-nowrap px-2.5 py-1.5 font-semibold">
+                    Acciones
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {items.map((item) => {
+                  const busy = redeployingId === item.projectId;
+                  return (
+                    <tr key={item.projectId} className="border-t border-white/50">
+                      <td className="max-w-[140px] truncate px-2.5 py-1.5 font-medium">
+                        {item.projectName}
+                      </td>
+                      <td className="max-w-[220px] truncate px-2.5 py-1.5" title={item.repoUrl}>
+                        {item.repoUrl}
+                      </td>
+                      <td className="px-2.5 py-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setLogsFor(item)}
+                          className="cursor-pointer"
+                        >
+                          <StatusBadge status={item.status} />
+                        </button>
+                      </td>
+                      <td className="min-w-[180px] whitespace-nowrap px-2.5 py-1.5 tabular-nums">
+                        {formatDate(item.createdAt)}
+                      </td>
+                      <td className="px-2.5 py-1.5">
+                        <div className="flex flex-nowrap items-center gap-1.5">
+                          <WinButton compact onClick={() => setLogsFor(item)}>
+                            Ver Logs
+                          </WinButton>
+                          <WinButton
+                            compact
+                            disabled={busy || redeployingId !== null}
+                            onClick={() => void onRedeploy(item)}
+                          >
+                            <span className="inline-flex items-center gap-1">
+                              <RefreshCw
+                                className={`size-3 ${busy ? "animate-spin" : ""}`}
+                                aria-hidden
+                              />
+                              {busy ? "Enviando..." : "Redeploy"}
+                            </span>
+                          </WinButton>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </AeroWindow>
       {open ? (
@@ -330,11 +355,16 @@ function isErrorLine(line: string): boolean {
 function formatDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("es", {
+  const day = date.toLocaleDateString("es-MX", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
+  });
+  const time = date.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
   });
+  return `${day} ${time}`;
 }
