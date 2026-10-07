@@ -1,9 +1,12 @@
 import "dotenv/config";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Worker } from "bullmq";
+import { appHost, appPublicUrl } from "../services/appHost.js";
+import { CaddyClient } from "../services/CaddyClient.js";
 import { DeploymentStore } from "../services/DeploymentStore.js";
 import { LogBus } from "../services/LogBus.js";
 import {
@@ -17,6 +20,7 @@ import { syncDeployment } from "../services/syncDeployment.js";
 const connection = createRedis();
 const store = new DeploymentStore(connection);
 const logs = new LogBus(connection);
+const caddy = new CaddyClient();
 const concurrency = Number(process.env.DEPLOY_CONCURRENCY ?? 2);
 
 const DEFAULT_DOCKERFILE = `FROM node:18-alpine
@@ -69,10 +73,43 @@ const worker = new Worker<DeployJobData>(
       await note("Construyendo imagen...");
       execSync(`docker build -t "${appName}" .`, { cwd: repoDir, stdio: "pipe" });
 
-      await note("Imagen construida. Estado: running");
-      await store.update(projectId, { status: "running", image: appName });
+      try {
+        execSync(`docker stop "${appName}"`, { stdio: "pipe" });
+      } catch {
+        // Contenedor previo inexistente.
+      }
+      try {
+        execSync(`docker rm "${appName}"`, { stdio: "pipe" });
+      } catch {
+        // Contenedor previo inexistente.
+      }
+
+      const containerPort = readContainerPort(dockerfilePath);
+      const puertoLibre = await findFreePort(8000);
+      const host = appHost(appName);
+
+      await note(`Levantando contenedor en el puerto ${puertoLibre}...`);
+      const containerId = execSync(
+        `docker run -d --name "${appName}" -p ${puertoLibre}:${containerPort} -e PORT=${containerPort} "${appName}"`,
+        { stdio: "pipe" },
+      )
+        .toString()
+        .trim();
+
+      await caddy.upsertRoute(projectId, host, puertoLibre);
+      await note(`Contenedor levantado y enrutado en el puerto ${puertoLibre}.`);
+
+      await store.update(projectId, {
+        status: "running",
+        image: appName,
+        port: String(puertoLibre),
+        host,
+      });
       await syncDeployment(deploymentId, {
         status: "running",
+        port: puertoLibre,
+        url: appPublicUrl(appName),
+        containerId,
         buildLogs: lines.join("\n"),
       });
     } catch (error) {
@@ -114,6 +151,48 @@ function dockerTag(image: string, projectName: string): string {
     return image;
   }
   return normalizeImageName(projectName);
+}
+
+function readContainerPort(dockerfilePath: string): number {
+  try {
+    const content = fs.readFileSync(dockerfilePath, "utf8");
+    const match = content.match(/^\s*EXPOSE\s+(\d+)/im);
+    if (match?.[1]) {
+      const port = Number(match[1]);
+      if (Number.isInteger(port) && port > 0 && port < 65536) {
+        return port;
+      }
+    }
+  } catch {
+    // Fallback abajo.
+  }
+  return 3000;
+}
+
+function findFreePort(from = 8000): Promise<number> {
+  const max = from + 999;
+  const tryPort = (port: number): Promise<number> =>
+    new Promise((resolve, reject) => {
+      if (port > max) {
+        reject(new Error(`No hay puerto libre entre ${from} y ${max}`));
+        return;
+      }
+      const server = net.createServer();
+      server.unref();
+      server.once("error", () => {
+        void tryPort(port + 1).then(resolve, reject);
+      });
+      server.listen(port, "0.0.0.0", () => {
+        server.close((error) => {
+          if (error) {
+            void tryPort(port + 1).then(resolve, reject);
+            return;
+          }
+          resolve(port);
+        });
+      });
+    });
+  return tryPort(from);
 }
 
 function commandError(error: unknown): string {
