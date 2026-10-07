@@ -1,8 +1,6 @@
 import "dotenv/config";
 import { exec, execSync } from "node:child_process";
 import fs from "node:fs";
-import http from "node:http";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -32,12 +30,12 @@ const caddy = new CaddyClient();
 const concurrency = Number(process.env.DEPLOY_CONCURRENCY ?? 5);
 const HEALTH_TIMEOUT_MS = 15_000;
 const HEALTH_INTERVAL_MS = 2_000;
+const CONTAINER_INTERNAL_PORT = 8000;
 const DEFAULT_RUNTIME_DATABASE_URL =
   process.env.DEPLOY_DEFAULT_DATABASE_URL?.trim() ||
   "postgresql://paas:paas@mi-paas-pgbouncer-1:6543/paas?schema=public";
 
 const PORT_KEY_PREFIX = "deploy:port:";
-const PORT_TTL_SECONDS = 60 * 60 * 24;
 
 const DEFAULT_DOCKERFILE = `FROM node:18-alpine
 WORKDIR /app
@@ -64,7 +62,6 @@ const worker = new Worker<DeployJobData>(
     const lines: string[] = [];
     const repoDir = repoDirectory(job.id);
     let cloned = false;
-    let reservedPort: number | null = null;
 
     const note = async (message: string) => {
       console.log(message);
@@ -124,11 +121,9 @@ const worker = new Worker<DeployJobData>(
         await releasePort(connection, Number(previous.port));
       }
 
-      const containerPort = readContainerPort(dockerfilePath);
-      const puertoLibre = await reserveFreePort(connection, 8000);
-      reservedPort = puertoLibre;
       const host = appHost(appName);
       const deployNetwork = resolveDeployNetwork();
+      const upstream = `${containerName}:${CONTAINER_INTERNAL_PORT}`;
 
       try {
         await execAsync("docker network create mi-paas_default");
@@ -145,6 +140,7 @@ const worker = new Worker<DeployJobData>(
           // La red ya existe, ignorar
         }
       }
+      await ensureCaddyOnNetwork(deployNetwork);
 
       const { variables, deploymentType } =
         await variablesForDeployment(deploymentId);
@@ -152,27 +148,27 @@ const worker = new Worker<DeployJobData>(
       if (!runtimeEnv.DATABASE_URL?.trim()) {
         runtimeEnv.DATABASE_URL = DEFAULT_RUNTIME_DATABASE_URL;
       }
-      runtimeEnv.PORT = "8000";
+      runtimeEnv.PORT = String(CONTAINER_INTERNAL_PORT);
       runtimeEnv.NODE_ENV = "production";
       const envFlags = dockerEnvFlags(runtimeEnv);
 
       await note(
-        `Levantando contenedor en el puerto ${puertoLibre} (red ${deployNetwork})...`,
+        `Levantando contenedor ${containerName} en red ${deployNetwork} (sin -p; upstream ${upstream})...`,
       );
       await note(
         `Inyectando env: ${Object.keys(runtimeEnv).sort().join(", ")}`,
       );
       const containerId = execSync(
-        `docker run -d --name "${containerName}" --network "${deployNetwork}" -p ${puertoLibre}:${containerPort} ${envFlags} "${appName}"`,
+        `docker run -d --name "${containerName}" --network "${deployNetwork}" ${envFlags} "${appName}"`,
         { stdio: "pipe" },
       )
         .toString()
         .trim();
 
       await note(
-        `Health check: intentando cada ${HEALTH_INTERVAL_MS / 1000}s durante hasta ${HEALTH_TIMEOUT_MS / 1000}s (cualquier HTTP = OK)...`,
+        `Health check: docker inspect Running cada ${HEALTH_INTERVAL_MS / 1000}s durante hasta ${HEALTH_TIMEOUT_MS / 1000}s...`,
       );
-      const health = await checkContainerHealth(containerId, puertoLibre, note);
+      const health = await checkContainerHealth(containerId, note);
       if (!health.ok) {
         const dockerLogs = readDockerLogs(containerId);
         const failure = [
@@ -185,55 +181,49 @@ const worker = new Worker<DeployJobData>(
         await store.update(projectId, {
           status: "failed",
           image: appName,
-          port: String(puertoLibre),
+          port: String(CONTAINER_INTERNAL_PORT),
           host,
         });
         await syncDeployment(deploymentId, {
           status: "failed",
-          port: puertoLibre,
+          port: CONTAINER_INTERNAL_PORT,
           containerId,
           buildLogs: lines.join("\n"),
         });
-        await releasePort(connection, puertoLibre);
-        reservedPort = null;
         throw new Error(health.reason);
       }
 
       let routed = false;
       try {
-        await caddy.upsertRoute(projectId, host, puertoLibre);
+        await caddy.upsertRoute(projectId, host, upstream);
         routed = true;
-        await note(`Contenedor levantado y enrutado en el puerto ${puertoLibre}.`);
+        await note(`Contenedor levantado y enrutado vía ${upstream}.`);
       } catch (caddyError) {
         const caddyMessage = commandError(caddyError);
         await note(
-          `Contenedor saludable en el puerto ${puertoLibre}, pero el enrutamiento de Caddy falló: ${caddyMessage}`,
+          `Contenedor saludable (${containerName}), pero el enrutamiento de Caddy falló: ${caddyMessage}`,
         );
       }
 
       await store.update(projectId, {
         status: "running",
         image: appName,
-        port: String(puertoLibre),
+        port: String(CONTAINER_INTERNAL_PORT),
         host,
       });
       await syncDeployment(deploymentId, {
         status: "running",
-        port: puertoLibre,
+        port: CONTAINER_INTERNAL_PORT,
         url: appPublicUrl(appName),
         containerId,
         buildLogs: lines.join("\n"),
       });
       if (!routed) {
         console.warn(
-          `Deploy ${projectId}: contenedor ${containerId} en :${puertoLibre} sin ruta Caddy`,
+          `Deploy ${projectId}: contenedor ${containerId} (${upstream}) sin ruta Caddy`,
         );
       }
-      reservedPort = null;
     } catch (error) {
-      if (reservedPort !== null) {
-        await releasePort(connection, reservedPort);
-      }
       const message = commandError(error);
       console.error(message);
       lines.push(message);
@@ -274,60 +264,11 @@ function dockerTag(image: string, projectName: string): string {
   return normalizeImageName(projectName);
 }
 
-function readContainerPort(dockerfilePath: string): number {
-  try {
-    const content = fs.readFileSync(dockerfilePath, "utf8");
-    const match = content.match(/^\s*EXPOSE\s+(\d+)/im);
-    if (match?.[1]) {
-      const port = Number(match[1]);
-      if (Number.isInteger(port) && port > 0 && port < 65536) {
-        return port;
-      }
-    }
-  } catch {
-    // Fallback abajo.
-  }
-  return 3000;
-}
-
-async function reserveFreePort(redis: Redis, from = 8000): Promise<number> {
-  const max = from + 999;
-  for (let port = from; port <= max; port++) {
-    const locked = await redis.set(
-      `${PORT_KEY_PREFIX}${port}`,
-      "1",
-      "EX",
-      PORT_TTL_SECONDS,
-      "NX",
-    );
-    if (locked !== "OK") {
-      continue;
-    }
-    if (!(await canBindPort(port))) {
-      await redis.del(`${PORT_KEY_PREFIX}${port}`);
-      continue;
-    }
-    return port;
-  }
-  throw new Error(`No hay puerto libre entre ${from} y ${max}`);
-}
-
 async function releasePort(redis: Redis, port: number): Promise<void> {
   if (!Number.isInteger(port) || port <= 0) {
     return;
   }
   await redis.del(`${PORT_KEY_PREFIX}${port}`);
-}
-
-function canBindPort(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.unref();
-    server.once("error", () => resolve(false));
-    server.listen(port, "0.0.0.0", () => {
-      server.close((error) => resolve(!error));
-    });
-  });
 }
 
 function sleep(ms: number): Promise<void> {
@@ -375,6 +316,17 @@ function resolveDeployNetwork(): string {
   return "mi-paas_default";
 }
 
+async function ensureCaddyOnNetwork(network: string): Promise<void> {
+  for (const container of ["mi-paas-caddy-1", "caddy", "paas-caddy-1"]) {
+    try {
+      await execAsync(`docker network connect "${network}" "${container}"`);
+      return;
+    } catch {
+      // Ya conectado o nombre incorrecto; probar el siguiente.
+    }
+  }
+}
+
 function readDockerLogs(containerId: string): string {
   try {
     return execSync(`docker logs --tail 80 "${containerId}"`, {
@@ -413,68 +365,38 @@ function containerRunning(containerId: string): { running: boolean; status: stri
   }
 }
 
-type HttpProbeResult =
-  | { ok: true; statusCode: number }
-  | { ok: false; code: string };
-
-function probeHttp(port: number): Promise<HttpProbeResult> {
-  return new Promise((resolve) => {
-    const request = http.get(
-      {
-        hostname: "127.0.0.1",
-        port,
-        path: "/",
-        timeout: HEALTH_INTERVAL_MS,
-      },
-      (response) => {
-        response.resume();
-        resolve({ ok: true, statusCode: response.statusCode ?? 0 });
-      },
-    );
-    request.on("timeout", () => {
-      request.destroy();
-      resolve({ ok: false, code: "ETIMEDOUT" });
-    });
-    request.on("error", (error: NodeJS.ErrnoException) => {
-      resolve({ ok: false, code: error.code ?? error.message });
-    });
-  });
-}
-
 async function checkContainerHealth(
   containerId: string,
-  hostPort: number,
   note?: (message: string) => Promise<void>,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   let attempt = 0;
-  let lastCode = "ECONNREFUSED";
+  let lastStatus = "starting";
 
   while (Date.now() <= deadline) {
     attempt += 1;
-
     const state = containerRunning(containerId);
-    if (!state.running) {
+    lastStatus = state.status;
+
+    if (state.running) {
+      if (note) {
+        await note(
+          `Health check OK en intento ${attempt}: Running=true (estado "${state.status}").`,
+        );
+      }
+      return { ok: true };
+    }
+
+    if (state.status === "exited" || state.status === "dead" || state.status === "missing") {
       return {
         ok: false,
         reason: `Health check falló: el contenedor pasó a estado "${state.status}" (Running=false).`,
       };
     }
 
-    const probe = await probeHttp(hostPort);
-    if (probe.ok) {
-      if (note) {
-        await note(
-          `Health check OK en intento ${attempt}: HTTP ${probe.statusCode} en el puerto ${hostPort}.`,
-        );
-      }
-      return { ok: true };
-    }
-
-    lastCode = probe.code;
     if (note) {
       await note(
-        `Health check intento ${attempt}: ${probe.code} en :${hostPort}; reintentando...`,
+        `Health check intento ${attempt}: Running=false (estado "${state.status}"); reintentando...`,
       );
     }
 
@@ -486,7 +408,7 @@ async function checkContainerHealth(
 
   return {
     ok: false,
-    reason: `Health check falló tras ${HEALTH_TIMEOUT_MS / 1000}s: conexión no establecida en el puerto ${hostPort} (${lastCode}).`,
+    reason: `Health check falló tras ${HEALTH_TIMEOUT_MS / 1000}s: Running=false (último estado "${lastStatus}").`,
   };
 }
 

@@ -9,14 +9,23 @@ export class CaddyClient {
     this.adminUrl = normalizeAdminUrl(adminUrl);
   }
 
-  async upsertRoute(projectId: string, host: string, port: number): Promise<void> {
+  async upsertRoute(
+    projectId: string,
+    host: string,
+    upstream: string,
+  ): Promise<void> {
+    const dial = upstream.trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*:\d+$/.test(dial)) {
+      throw new Error(`Upstream Caddy inválido: ${upstream}`);
+    }
+
     const route = {
       "@id": `route-${projectId}`,
       match: [{ host: [host] }],
       handle: [
         {
           handler: "reverse_proxy",
-          upstreams: [{ dial: `host.docker.internal:${port}` }],
+          upstreams: [{ dial }],
         },
       ],
       terminal: true,
@@ -25,9 +34,7 @@ export class CaddyClient {
 
     try {
       await this.adminRequest("PATCH", `/id/route-${projectId}`, body);
-      console.log(
-        `Caddy: ruta actualizada para ${host} → host.docker.internal:${port}`,
-      );
+      console.log(`Caddy: ruta actualizada para ${host} → ${dial}`);
       return;
     } catch (error) {
       if (!isNotFound(error)) {
@@ -36,9 +43,7 @@ export class CaddyClient {
     }
 
     await this.adminRequest("POST", "/config/apps/http/servers/paas/routes/0", body);
-    console.log(
-      `Caddy: ruta creada para ${host} → host.docker.internal:${port}`,
-    );
+    console.log(`Caddy: ruta creada para ${host} → ${dial}`);
   }
 
   private adminRequest(method: string, requestPath: string, body: string): Promise<string> {
