@@ -6,6 +6,11 @@ import { appHost } from "../services/appHost.js";
 import { CaddyClient } from "../services/CaddyClient.js";
 import { normalizeCustomDomain } from "../services/customDomain.js";
 import type { DeploymentStore } from "../services/DeploymentStore.js";
+import {
+  DatabaseAddonError,
+  DatabaseAddonService,
+  type AddonType,
+} from "../services/DatabaseAddonService.js";
 
 const MEMORY_LIMIT = /^(\d+(?:\.\d+)?)\s*(b|k|kb|m|mb|g|gb)$/i;
 
@@ -187,6 +192,68 @@ export async function projectRoutes(
         }
         request.log.error(error);
         return reply.code(500).send({ error: "No se pudo actualizar el proyecto" });
+      }
+    },
+  );
+
+  const addons = new DatabaseAddonService();
+  const addonCreateSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["type"],
+    properties: {
+      type: { type: "string", enum: ["postgres", "redis"] },
+    },
+  } as const;
+
+  app.get<{ Params: { id: string } }>(
+    "/projects/:id/addons",
+    { preValidation: requireAdmin },
+    async (request, reply) => {
+      const rows = await addons.list(request.params.id);
+      if (!rows) {
+        return reply.code(404).send({ error: "Proyecto no encontrado" });
+      }
+      return rows;
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { type: AddonType } }>(
+    "/projects/:id/addons",
+    { schema: { body: addonCreateSchema }, preValidation: requireAdmin },
+    async (request, reply) => {
+      try {
+        const created = await addons.create(request.params.id, request.body.type);
+        return reply.code(201).send(created);
+      } catch (error) {
+        if (error instanceof DatabaseAddonError && error.message === "Proyecto no encontrado") {
+          return reply.code(404).send({ error: error.message });
+        }
+        const message =
+          error instanceof DatabaseAddonError
+            ? error.message
+            : "No se pudo crear la base de datos";
+        return reply.code(400).send({ error: message });
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string; addonId: string } }>(
+    "/projects/:id/addons/:addonId",
+    { preValidation: requireAdmin },
+    async (request, reply) => {
+      try {
+        const removed = await addons.remove(request.params.id, request.params.addonId);
+        if (!removed) {
+          return reply.code(404).send({ error: "Base de datos no encontrada" });
+        }
+        return { ok: true };
+      } catch (error) {
+        const message =
+          error instanceof DatabaseAddonError
+            ? error.message
+            : "No se pudo eliminar la base de datos";
+        return reply.code(400).send({ error: message });
       }
     },
   );

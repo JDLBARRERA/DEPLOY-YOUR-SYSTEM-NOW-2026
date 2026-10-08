@@ -61,10 +61,19 @@ export interface PanelSettings {
   updatedAt: string;
 }
 
+export interface LocalAddon {
+  id: string;
+  projectId: string;
+  type: "postgres" | "redis";
+  containerName: string;
+  connectionString: string;
+}
+
 interface StoreShape {
   deployments: LocalDeployment[];
   databases: LocalDatabase[];
   projects?: LocalProject[];
+  addons?: LocalAddon[];
   logs: Record<string, string[]>;
   settings?: PanelSettings;
 }
@@ -112,6 +121,7 @@ function ensureStore(): StoreShape {
       deployments: Array.isArray(parsed.deployments) ? parsed.deployments : [],
       databases: Array.isArray(parsed.databases) ? parsed.databases : [],
       projects: Array.isArray(parsed.projects) ? parsed.projects : [],
+      addons: Array.isArray(parsed.addons) ? parsed.addons : [],
       logs: parsed.logs && typeof parsed.logs === "object" ? parsed.logs : {},
       settings: parsed.settings,
     };
@@ -398,6 +408,59 @@ export function updateProjectLimits(
   saveStore(store);
   const { githubToken, ...project } = next;
   return { ...project, hasGithubToken: Boolean(githubToken?.trim()) };
+}
+
+export function listProjectAddons(projectId: string): LocalAddon[] | null {
+  const store = ensureStore();
+  const known = listProjects().some((project) => project.id === projectId);
+  if (!known) {
+    return null;
+  }
+  return (store.addons ?? []).filter((addon) => addon.projectId === projectId);
+}
+
+export function createProjectAddon(
+  projectId: string,
+  type: string,
+): LocalAddon | null {
+  if (type !== "postgres" && type !== "redis") {
+    throw new Error("type debe ser postgres o redis");
+  }
+  const store = ensureStore();
+  if (!listProjects().some((project) => project.id === projectId)) {
+    return null;
+  }
+  const suffix = randomBytes(4).toString("hex");
+  const containerName = type === "postgres" ? `paas-pg-${suffix}` : `paas-redis-${suffix}`;
+  const password = randomBytes(18).toString("hex");
+  const connectionString =
+    type === "postgres"
+      ? `postgresql://usr_local:${encodeURIComponent(password)}@${containerName}:5432/db_local`
+      : `redis://:${encodeURIComponent(password)}@${containerName}:6379/0`;
+  const addon: LocalAddon = {
+    id: randomBytes(8).toString("hex"),
+    projectId,
+    type,
+    containerName,
+    connectionString,
+  };
+  store.addons = [...(store.addons ?? []), addon];
+  saveStore(store);
+  return addon;
+}
+
+export function deleteProjectAddon(projectId: string, addonId: string): boolean {
+  const store = ensureStore();
+  const before = store.addons ?? [];
+  const next = before.filter(
+    (addon) => !(addon.projectId === projectId && addon.id === addonId),
+  );
+  if (next.length === before.length) {
+    return false;
+  }
+  store.addons = next;
+  saveStore(store);
+  return true;
 }
 
 export function listDatabases(): LocalDatabase[] {

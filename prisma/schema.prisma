@@ -99,6 +99,16 @@ model Project {
   deployments Deployment[]
   env         EnvVar[]
   database    DatabaseInstance?
+  addons      DatabaseAddon[]
+}
+
+model DatabaseAddon {
+  id               String  @id @default(cuid())
+  projectId        String
+  project          Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type             String
+  containerName    String  @unique
+  connectionString String  @db.Text
 }
 
 model EnvVar {

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { WinButton } from "@/components/aero-window";
+import { ProjectAddons } from "@/components/project-addons";
 import { apiFetch } from "@/lib/api";
 
 export interface ProjectLimits {
@@ -115,9 +116,12 @@ export function ProjectLimitsCard() {
       ) : (
         <div className="flex flex-col gap-3">
           {projects.map((project) => (
-            <form
+            <div
               key={project.id}
-              className="flex flex-col gap-2 rounded-md border border-white/60 bg-white/50 p-3"
+              className="rounded-md border border-white/60 bg-white/50 p-3"
+            >
+            <form
+              className="flex flex-col gap-2"
               onSubmit={(event) => {
                 event.preventDefault();
                 void save(project);
@@ -206,6 +210,8 @@ export function ProjectLimitsCard() {
               </WinButton>
               </div>
             </form>
+            <ProjectAddons projectId={project.id} projectName={project.name} />
+            </div>
           ))}
         </div>
       )}

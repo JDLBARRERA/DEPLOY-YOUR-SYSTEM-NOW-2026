@@ -3,11 +3,14 @@ import { adminApiKey, isAuthorizedRequest } from "@/lib/auth";
 import {
   createDatabase,
   createDeployment,
+  createProjectAddon,
   deleteDatabase,
+  deleteProjectAddon,
   getSettings,
   isSqliteUrl,
   listDatabases,
   listDeployments,
+  listProjectAddons,
   listProjects,
   redeploy,
   saveSettings,
@@ -127,6 +130,55 @@ async function localFallback(
     return NextResponse.json(updated, {
       headers: { "x-dn-mode": "local" },
     });
+  }
+
+  if (head === "projects" && id && action === "addons") {
+    const addonId = segments[3];
+    if (method === "GET" && !addonId) {
+      const rows = listProjectAddons(id);
+      if (!rows) {
+        return NextResponse.json(
+          { error: "Proyecto no encontrado" },
+          { status: 404, headers: { "x-dn-mode": "local" } },
+        );
+      }
+      return NextResponse.json(rows, { headers: { "x-dn-mode": "local" } });
+    }
+    if (method === "POST" && !addonId) {
+      const body = parseJson(bodyText) as { type?: string };
+      try {
+        const created = createProjectAddon(id, body.type ?? "");
+        if (!created) {
+          return NextResponse.json(
+            { error: "Proyecto no encontrado" },
+            { status: 404, headers: { "x-dn-mode": "local" } },
+          );
+        }
+        return NextResponse.json(created, {
+          status: 201,
+          headers: { "x-dn-mode": "local" },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "No se pudo crear la base";
+        return NextResponse.json(
+          { error: message },
+          { status: 400, headers: { "x-dn-mode": "local" } },
+        );
+      }
+    }
+    if (method === "DELETE" && addonId && !segments[4]) {
+      const ok = deleteProjectAddon(id, addonId);
+      if (!ok) {
+        return NextResponse.json(
+          { error: "Base de datos no encontrada" },
+          { status: 404, headers: { "x-dn-mode": "local" } },
+        );
+      }
+      return NextResponse.json(
+        { ok: true },
+        { status: 200, headers: { "x-dn-mode": "local" } },
+      );
+    }
   }
 
   if (method === "GET" && head === "databases" && !id) {
