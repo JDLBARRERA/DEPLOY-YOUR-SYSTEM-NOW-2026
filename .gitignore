@@ -3,3 +3,8 @@ dist
 .env
 infra/.env.prod
 src/generated
+
+.env
+.env.local
+.env.*.local
+*.env
