@@ -24,7 +24,6 @@ jobs:
           script: |
             echo "=== [PASO 1] Cargar rutas de Node y PM2 ==="
             export NVM_DIR="$HOME/.nvm"
-            # Importante: no usar "test && source" suelto; con script_stop=true un test fallido mata el job.
             if [ -s "$NVM_DIR/nvm.sh" ]; then
               . "$NVM_DIR/nvm.sh"
             fi
@@ -43,14 +42,23 @@ jobs:
 
             echo "=== [PASO 2] Actualizar código desde GitHub ==="
             cd ~
-            if [ -d DEPLOY-YOUR-SYSTEM-NOW-2026/.git ]; then
-              cd DEPLOY-YOUR-SYSTEM-NOW-2026
+            git config --global --add safe.directory "*"
+            REPO_DIR="$HOME/DEPLOY-YOUR-SYSTEM-NOW-2026"
+            if [ -d "$REPO_DIR/.git" ]; then
+              echo "Repo git detectado en $REPO_DIR"
+              cd "$REPO_DIR"
+              git remote set-url origin https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git
               git fetch origin main
+              git checkout -B main origin/main
               git reset --hard origin/main
             else
-              git clone https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git
-              cd DEPLOY-YOUR-SYSTEM-NOW-2026
+              echo "Clonando repo limpio en $REPO_DIR"
+              rm -rf "$REPO_DIR"
+              git clone --branch main https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git "$REPO_DIR"
+              cd "$REPO_DIR"
             fi
+            echo "HEAD=$(git rev-parse --short HEAD)"
+            pwd
 
             echo "=== [PASO 3] Instalar dependencias y compilar Next.js ==="
             cd mi-paas-dashboard
