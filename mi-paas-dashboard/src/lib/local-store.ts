@@ -39,6 +39,15 @@ export interface EnvPair {
   value: string;
 }
 
+export interface LocalProject {
+  id: string;
+  name: string;
+  repoUrl: string;
+  branch: string;
+  memoryLimit: string;
+  cpuLimit: number;
+}
+
 export interface PanelSettings {
   githubPat: string;
   adminPassword: string;
@@ -53,6 +62,7 @@ export interface PanelSettings {
 interface StoreShape {
   deployments: LocalDeployment[];
   databases: LocalDatabase[];
+  projects?: LocalProject[];
   logs: Record<string, string[]>;
   settings?: PanelSettings;
 }
@@ -99,6 +109,7 @@ function ensureStore(): StoreShape {
     return {
       deployments: Array.isArray(parsed.deployments) ? parsed.deployments : [],
       databases: Array.isArray(parsed.databases) ? parsed.databases : [],
+      projects: Array.isArray(parsed.projects) ? parsed.projects : [],
       logs: parsed.logs && typeof parsed.logs === "object" ? parsed.logs : {},
       settings: parsed.settings,
     };
@@ -286,6 +297,49 @@ export function listDeployments(): LocalDeployment[] {
   return ensureStore().deployments.sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt),
   );
+}
+
+export function listProjects(): LocalProject[] {
+  const store = ensureStore();
+  const saved = new Map((store.projects ?? []).map((project) => [project.id, project]));
+  for (const deployment of store.deployments) {
+    const id = `name:${deployment.projectName}`;
+    if (saved.has(id)) {
+      continue;
+    }
+    saved.set(id, {
+      id,
+      name: deployment.projectName,
+      repoUrl: deployment.repoUrl,
+      branch: deployment.branch || "main",
+      memoryLimit: "256m",
+      cpuLimit: 0.5,
+    });
+  }
+  return [...saved.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function updateProjectLimits(
+  id: string,
+  patch: { memoryLimit?: string; cpuLimit?: number },
+): LocalProject | null {
+  const store = ensureStore();
+  const projects = listProjects();
+  const current = projects.find((project) => project.id === id);
+  if (!current) {
+    return null;
+  }
+  const next: LocalProject = {
+    ...current,
+    memoryLimit: patch.memoryLimit?.trim() || current.memoryLimit,
+    cpuLimit:
+      patch.cpuLimit != null && Number.isFinite(patch.cpuLimit)
+        ? patch.cpuLimit
+        : current.cpuLimit,
+  };
+  store.projects = projects.map((project) => (project.id === id ? next : project));
+  saveStore(store);
+  return next;
 }
 
 export function listDatabases(): LocalDatabase[] {

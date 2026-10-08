@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { AeroWindow, WinButton } from "@/components/aero-window";
+import { ProjectLimitsCard } from "@/components/project-limits";
 import { apiFetch, type EnvPair, type PanelSettings } from "@/lib/api";
 
 const emptySettings = (): PanelSettings => ({
@@ -333,6 +334,8 @@ export default function SettingsPage() {
             </WinButton>
           </div>
         </SettingsCard>
+
+        <ProjectLimitsCard />
       </div>
 
       <div className="mt-4 flex items-center justify-between gap-3 border-t border-white/50 pt-3">

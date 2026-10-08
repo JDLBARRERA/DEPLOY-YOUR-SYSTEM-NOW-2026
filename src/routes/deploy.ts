@@ -1,5 +1,6 @@
 import type { Queue } from "bullmq";
 import type { FastifyInstance } from "fastify";
+import { requireAdmin } from "../auth/requireAdmin.js";
 import type { DeployJobData } from "../queues/deployQueue.js";
 import { enqueueDeployment } from "../services/enqueueDeployment.js";
 import {
@@ -47,7 +48,7 @@ export async function deployRoutes(
 ): Promise<void> {
   app.post<{ Body: DeployBody }>(
     "/deploy",
-    { schema: { body: deployBodySchema } },
+    { schema: { body: deployBodySchema }, preValidation: requireAdmin },
     async (request, reply) => {
       try {
         assertPublicGitHubRepo(request.body.repoUrl);

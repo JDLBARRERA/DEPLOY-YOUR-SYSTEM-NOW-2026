@@ -58,6 +58,17 @@ export async function githubWebhookRoutes(
         }
         return reply.code(200).send({ ignored: true });
       }
+      if ("closed" in result) {
+        console.log(
+          `Preview cerrado para ${result.branch}: ${result.removedContainers} contenedores, ${result.removedDatabases} bases`,
+        );
+        return reply.code(200).send({
+          closed: true,
+          branch: result.branch,
+          removedContainers: result.removedContainers,
+          removedDatabases: result.removedDatabases,
+        });
+      }
       console.log("Trabajo encolado exitosamente");
       return reply.code(200).send({ deployments: result.deployments });
     } catch (error) {

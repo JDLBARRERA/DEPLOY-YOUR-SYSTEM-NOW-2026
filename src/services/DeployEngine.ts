@@ -29,6 +29,8 @@ export interface DeployRequest {
   env?: Record<string, string>;
   variables?: ScopedEnvVar[];
   deploymentType?: DeploymentEnvType;
+  memoryLimit?: string | null;
+  cpuLimit?: number | null;
   onLog?: (line: string) => void;
 }
 
@@ -96,17 +98,63 @@ export function githubCloneUrl(repoUrl: string): string {
   );
 }
 
-export function deployResourceLimits(): { memory: string; cpus: string } {
+const DEFAULT_MEMORY = "256m";
+const DEFAULT_MEMORY_BYTES = 256 * 1024 * 1024;
+const DEFAULT_NANO_CPUS = 5e8;
+
+function configuredLimit(
+  env: Record<string, string> | undefined,
+  key: string,
+): string | undefined {
+  const value = env?.[key]?.trim();
+  return value ? value : undefined;
+}
+
+/**
+ * Límite del proyecto (MAX_MEMORY / MAX_CPUS en el env inyectado) o el
+ * tope estricto por defecto: 256 MB de RAM y 0.5 CPU.
+ */
+export function deployResourceLimits(
+  env?: Record<string, string>,
+  project?: { memoryLimit?: string | null; cpuLimit?: number | null },
+): {
+  memory: string;
+  cpus: string;
+  memoryBytes: number;
+  nanoCpus: number;
+} {
+  const projectMemory = project?.memoryLimit?.trim();
+  const projectCpu =
+    project?.cpuLimit != null &&
+    Number.isFinite(project.cpuLimit) &&
+    project.cpuLimit > 0
+      ? String(project.cpuLimit)
+      : undefined;
+  const memory =
+    projectMemory ||
+    configuredLimit(env, "MAX_MEMORY") ||
+    configuredLimit(env, "DEPLOY_MEMORY") ||
+    DEFAULT_MEMORY;
+  const rawCpus =
+    projectCpu ||
+    configuredLimit(env, "MAX_CPUS") ||
+    configuredLimit(env, "DEPLOY_CPUS") ||
+    "0.5";
+  const cpus = /^\d+(\.\d+)?$/.test(rawCpus) && Number(rawCpus) > 0 ? rawCpus : "0.5";
+  const memoryBytes = parseMemoryBytes(memory);
+  const nanoCpus = Math.round(Number(cpus) * 1e9);
   return {
-    memory: process.env.DEPLOY_MEMORY?.trim() || "512m",
-    cpus: process.env.DEPLOY_CPUS?.trim() || "0.5",
+    memory: String(memoryBytes),
+    cpus,
+    memoryBytes,
+    nanoCpus: Number.isFinite(nanoCpus) && nanoCpus > 0 ? nanoCpus : DEFAULT_NANO_CPUS,
   };
 }
 
 export function parseMemoryBytes(value: string): number {
   const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(b|k|kb|m|mb|g|gb)?$/i);
   if (!match) {
-    return 512 * 1024 * 1024;
+    return DEFAULT_MEMORY_BYTES;
   }
   const amount = Number(match[1]);
   const unit = (match[2] ?? "b").toLowerCase();
@@ -118,7 +166,8 @@ export function parseMemoryBytes(value: string): number {
         : unit === "k" || unit === "kb"
           ? 1024
           : 1;
-  return Math.round(amount * factor);
+  const bytes = Math.round(amount * factor);
+  return bytes > 0 ? bytes : DEFAULT_MEMORY_BYTES;
 }
 
 export function normalizeImageName(projectName: string): string {
@@ -239,8 +288,10 @@ export class DeployEngine {
 
     onLog("Starting container");
     const network = await this.deployNetwork();
-    const limits = deployResourceLimits();
-    const nanoCpus = Math.round(Number(limits.cpus) * 1e9);
+    const limits = deployResourceLimits(env, {
+      memoryLimit: input.memoryLimit,
+      cpuLimit: input.cpuLimit,
+    });
     const container = await this.docker.createContainer({
       name: `paas-${projectId}`,
       Image: image,
@@ -258,9 +309,9 @@ export class DeployEngine {
         PortBindings: {
           [`${CONTAINER_PORT}/tcp`]: [{ HostPort: "0" }],
         },
-        Memory: parseMemoryBytes(limits.memory),
-        MemorySwap: parseMemoryBytes(limits.memory),
-        NanoCpus: Number.isFinite(nanoCpus) && nanoCpus > 0 ? nanoCpus : 5e8,
+        Memory: limits.memoryBytes,
+        MemorySwap: limits.memoryBytes,
+        NanoCpus: limits.nanoCpus,
         ...(network ? { NetworkMode: network } : {}),
       },
     });
@@ -306,14 +357,34 @@ export class DeployEngine {
       if (item.Id === currentContainerId) {
         continue;
       }
+      await this.removeContainer(item.Id);
+    }
+  }
 
-      const previous = this.docker.getContainer(item.Id);
-      try {
-        await previous.stop({ t: 5 });
-      } catch {
-        // The previous container may already be stopped.
-      }
-      await previous.remove({ force: true });
+  /** Quita los contenedores de una imagen de preview, etiquetados o por ancestro. */
+  async removeImageContainers(image: string): Promise<number> {
+    await this.stopPrevious(image, "");
+    const listed = await this.docker.listContainers({
+      all: true,
+      filters: { ancestor: [image] },
+    });
+    for (const item of listed) {
+      await this.removeContainer(item.Id);
+    }
+    return listed.length;
+  }
+
+  async removeContainer(containerId: string): Promise<void> {
+    const container = this.docker.getContainer(containerId);
+    try {
+      await container.stop({ t: 5 });
+    } catch {
+      // The container may already be stopped or missing.
+    }
+    try {
+      await container.remove({ force: true });
+    } catch {
+      // Already removed.
     }
   }
 }

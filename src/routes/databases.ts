@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { requireAdmin } from "../auth/requireAdmin.js";
 import {
   DatabaseManagerError,
   DatabaseManagerService,
@@ -115,7 +116,7 @@ export async function databaseRoutes(
   databases: DatabaseManagerService,
   containers: ContainerDatabaseService,
 ): Promise<void> {
-  app.get("/databases", async () => {
+  app.get("/databases", { preValidation: requireAdmin }, async () => {
     const [legacy, docker] = await Promise.all([
       databases.listDatabases().catch((error: unknown) => {
         console.warn(
@@ -142,7 +143,7 @@ export async function databaseRoutes(
     Body: { name: string; type?: DatabaseEngine; projectId?: string };
   }>(
     "/databases",
-    { schema: { body: createSchema } },
+    { schema: { body: createSchema }, preValidation: requireAdmin },
     async (request, reply) => {
       try {
         const type = request.body.type;
@@ -172,7 +173,7 @@ export async function databaseRoutes(
 
   app.post<{ Params: { dbName: string }; Body: { name: string } }>(
     "/databases/:dbName/branch",
-    { schema: { body: branchSchema } },
+    { schema: { body: branchSchema }, preValidation: requireAdmin },
     async (request, reply) => {
       try {
         const created = await databases.branchDatabase(
@@ -189,7 +190,7 @@ export async function databaseRoutes(
 
   app.post<{ Params: { id: string }; Body: { projectId: string } }>(
     "/databases/:id/link",
-    { schema: { body: linkSchema } },
+    { schema: { body: linkSchema }, preValidation: requireAdmin },
     async (request, reply) => {
       try {
         const linked = await databases.linkDatabase(

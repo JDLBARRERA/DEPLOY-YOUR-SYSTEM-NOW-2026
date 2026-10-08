@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { adminApiKey, isAuthorizedRequest } from "@/lib/auth";
 import {
   createDatabase,
   createDeployment,
@@ -7,8 +8,10 @@ import {
   isSqliteUrl,
   listDatabases,
   listDeployments,
+  listProjects,
   redeploy,
   saveSettings,
+  updateProjectLimits,
   type EnvPair,
   type PanelSettings,
 } from "@/lib/local-store";
@@ -22,9 +25,18 @@ async function handle(request: Request, context: Ctx): Promise<Response> {
   const joined = segments.join("/");
   const method = request.method.toUpperCase();
   const isDatabasesRoute = segments[0] === "databases";
+  const isDeployRoute = segments[0] === "deploy";
+  const isProjectsRoute = segments[0] === "projects";
   const isSettingsRoute = segments[0] === "settings";
   const forceLocal =
     isSettingsRoute || (isDatabasesRoute && isSqliteUrl());
+
+  if (
+    (isDeployRoute || isDatabasesRoute || isProjectsRoute) &&
+    !(await isAuthorizedRequest(request))
+  ) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   let bodyText: string | undefined;
   if (method !== "GET" && method !== "HEAD") {
@@ -37,6 +49,9 @@ async function handle(request: Request, context: Ctx): Promise<Response> {
       body: bodyText,
       headers: {
         Accept: request.headers.get("Accept") ?? "application/json",
+        ...(isDeployRoute || isDatabasesRoute || isProjectsRoute
+          ? { "x-api-key": adminApiKey() }
+          : {}),
       },
     });
 
@@ -44,11 +59,13 @@ async function handle(request: Request, context: Ctx): Promise<Response> {
       // DELETE de databases puede no existir en el motor; caer a local.
       if (
         !(
-          isDatabasesRoute &&
-          method === "DELETE" &&
-          (upstream.status === 404 ||
-            upstream.status === 405 ||
-            upstream.status === 501)
+          (isDatabasesRoute &&
+            method === "DELETE" &&
+            (upstream.status === 404 ||
+              upstream.status === 405 ||
+              upstream.status === 501)) ||
+          (isProjectsRoute &&
+            (upstream.status === 404 || upstream.status === 501))
         )
       ) {
         const headers = new Headers(upstream.headers);
@@ -73,6 +90,29 @@ async function localFallback(
 
   if (method === "GET" && head === "deployments" && !id) {
     return NextResponse.json(listDeployments(), {
+      headers: { "x-dn-mode": "local" },
+    });
+  }
+
+  if (method === "GET" && head === "projects" && !id) {
+    return NextResponse.json(listProjects(), {
+      headers: { "x-dn-mode": "local" },
+    });
+  }
+
+  if ((method === "PATCH" || method === "PUT") && head === "projects" && id && !action) {
+    const body = parseJson(bodyText) as {
+      memoryLimit?: string;
+      cpuLimit?: number;
+    };
+    const updated = updateProjectLimits(id, body);
+    if (!updated) {
+      return NextResponse.json(
+        { error: "Proyecto no encontrado" },
+        { status: 404, headers: { "x-dn-mode": "local" } },
+      );
+    }
+    return NextResponse.json(updated, {
       headers: { "x-dn-mode": "local" },
     });
   }

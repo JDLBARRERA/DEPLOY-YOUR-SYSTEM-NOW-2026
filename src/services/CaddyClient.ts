@@ -46,6 +46,20 @@ export class CaddyClient {
     console.log(`Caddy: ruta creada para ${host} → ${dial}`);
   }
 
+  async deleteRoute(projectId: string): Promise<void> {
+    if (!/^[a-zA-Z0-9_-]+$/.test(projectId)) {
+      return;
+    }
+    try {
+      await this.adminRequest("DELETE", `/id/route-${projectId}`, "");
+      console.log(`Caddy: ruta eliminada route-${projectId}`);
+    } catch (error) {
+      if (!isNotFound(error)) {
+        throw error;
+      }
+    }
+  }
+
   private adminRequest(method: string, requestPath: string, body: string): Promise<string> {
     const headers: Record<string, string | number> = {
       Host: "localhost:2019",

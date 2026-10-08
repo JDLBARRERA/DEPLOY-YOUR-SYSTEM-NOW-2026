@@ -350,6 +350,36 @@ export class DatabaseManagerService {
     };
   }
 
+  async deletePreviewDatabase(parentDbName: string, branch: string): Promise<boolean> {
+    const parent = await prisma.databaseInstance.findUnique({
+      where: { dbName: parentDbName },
+    });
+    if (!parent) {
+      return false;
+    }
+
+    const label = `preview/${branch}`.slice(0, 64);
+    const existing = await prisma.databaseInstance.findFirst({
+      where: { parentId: parent.id, name: label },
+    });
+    if (!existing || existing.projectId) {
+      return false;
+    }
+
+    const dbIdent = assertIdentifier(existing.dbName);
+    const userIdent = assertIdentifier(existing.dbUser);
+    await withAdmin("paas", async (client) => {
+      await client.query(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+        [existing.dbName],
+      );
+      await client.query(`DROP DATABASE IF EXISTS ${dbIdent}`);
+      await client.query(`DROP USER IF EXISTS ${userIdent}`);
+    });
+    await prisma.databaseInstance.delete({ where: { id: existing.id } });
+    return true;
+  }
+
   async listDatabases(): Promise<ManagedDatabase[]> {
     const rows = await prisma.databaseInstance.findMany({
       orderBy: { createdAt: "desc" },

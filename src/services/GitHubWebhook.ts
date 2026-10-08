@@ -3,7 +3,8 @@ import type { Queue } from "bullmq";
 import { prisma } from "../db.js";
 import type { DeployJobData } from "../queues/deployQueue.js";
 import { appPublicUrl } from "./appHost.js";
-import { deploymentImageName } from "./DeployEngine.js";
+import { CaddyClient } from "./CaddyClient.js";
+import { DeployEngine, deploymentImageName } from "./DeployEngine.js";
 import type { DatabaseManagerService } from "./DatabaseManagerService.js";
 import type { DeploymentStore } from "./DeploymentStore.js";
 import type { LogBus } from "./LogBus.js";
@@ -110,6 +111,14 @@ export class GitHubWebhookService {
         projectRepoUrls: string[];
       }
     | {
+        closed: true;
+        branch: string;
+        removedContainers: number;
+        removedDatabases: number;
+        repoUrl: string;
+        projectRepoUrls: string[];
+      }
+    | {
         ignored: true;
         repoUrl?: string;
         projectRepoUrls?: string[];
@@ -154,6 +163,21 @@ export class GitHubWebhookService {
     });
     if (matches.length === 0) {
       return { ignored: true, repoUrl, projectRepoUrls, missingProject: true };
+    }
+
+    if (event === "pull_request" && text(payload.action) === "closed") {
+      const branch = this.pullRequestHeadBranch(payload);
+      if (!branch) {
+        return { ignored: true, repoUrl, projectRepoUrls };
+      }
+      const removed = await this.removePreviews(matches, branch);
+      return {
+        closed: true,
+        branch,
+        ...removed,
+        repoUrl,
+        projectRepoUrls,
+      };
     }
 
     const target = this.readTarget(event, payload);
@@ -221,6 +245,67 @@ export class GitHubWebhookService {
     }
 
     return { deployments, repoUrl, projectRepoUrls };
+  }
+
+  private pullRequestHeadBranch(payload: Record<string, unknown>): string | undefined {
+    const pull = isRecord(payload.pull_request) ? payload.pull_request : undefined;
+    const head = pull && isRecord(pull.head) ? pull.head : undefined;
+    return text(head?.ref);
+  }
+
+  private async removePreviews(
+    projects: Array<{ id: string; name: string; database: { dbName: string } | null }>,
+    branch: string,
+  ): Promise<{ removedContainers: number; removedDatabases: number }> {
+    const engine = new DeployEngine();
+    const caddy = new CaddyClient();
+    let removedContainers = 0;
+    let removedDatabases = 0;
+    const records = await this.deps.store.list();
+
+    for (const project of projects) {
+      const image = deploymentImageName(project.name, branch, true);
+      removedContainers += await engine.removeImageContainers(image);
+
+      const previews = records.filter((record) => record.image === image);
+      for (const record of previews) {
+        await engine.removeContainer(`paas-${record.projectId}`);
+        await caddy.deleteRoute(record.projectId);
+        await this.deps.store.update(record.projectId, { status: "removed" });
+        removedContainers += 1;
+      }
+
+      const deployments = await prisma.deployment.findMany({
+        where: {
+          projectId: project.id,
+          type: "PREVIEW",
+          branch,
+          containerId: { not: null },
+        },
+      });
+      for (const deployment of deployments) {
+        if (deployment.containerId) {
+          await engine.removeContainer(deployment.containerId);
+          removedContainers += 1;
+        }
+      }
+      await prisma.deployment.updateMany({
+        where: { projectId: project.id, type: "PREVIEW", branch },
+        data: { status: "removed" },
+      });
+
+      if (project.database) {
+        const deleted = await this.deps.databases.deletePreviewDatabase(
+          project.database.dbName,
+          branch,
+        );
+        if (deleted) {
+          removedDatabases += 1;
+        }
+      }
+    }
+
+    return { removedContainers, removedDatabases };
   }
 
   private readTarget(

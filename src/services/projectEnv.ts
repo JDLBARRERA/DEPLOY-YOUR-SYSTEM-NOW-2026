@@ -50,9 +50,16 @@ export function selectEnv(
 export async function variablesForDeployment(deploymentId: string | undefined): Promise<{
   variables: ScopedEnvVar[];
   deploymentType: DeploymentEnvType;
+  memoryLimit: string;
+  cpuLimit: number;
 }> {
   if (!deploymentId) {
-    return { variables: [], deploymentType: "PRODUCTION" };
+    return {
+      variables: [],
+      deploymentType: "PRODUCTION",
+      memoryLimit: "256m",
+      cpuLimit: 0.5,
+    };
   }
 
   const deployment = await prisma.deployment.findUnique({
@@ -61,6 +68,8 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
       type: true,
       project: {
         select: {
+          memoryLimit: true,
+          cpuLimit: true,
           env: {
             select: { key: true, value: true, environment: true },
           },
@@ -70,11 +79,18 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
   });
 
   if (!deployment) {
-    return { variables: [], deploymentType: "PRODUCTION" };
+    return {
+      variables: [],
+      deploymentType: "PRODUCTION",
+      memoryLimit: "256m",
+      cpuLimit: 0.5,
+    };
   }
 
   return {
     deploymentType: deployment.type,
+    memoryLimit: deployment.project.memoryLimit || "256m",
+    cpuLimit: deployment.project.cpuLimit || 0.5,
     variables: deployment.project.env.map((variable: any) => ({
       key: variable.key,
       value: variable.value,

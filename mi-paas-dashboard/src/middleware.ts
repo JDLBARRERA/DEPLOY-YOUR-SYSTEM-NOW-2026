@@ -8,10 +8,18 @@ import {
 
 const PUBLIC_PATHS = new Set(["/login", "/api/login", "/api/auth/login"]);
 
-export async function middleware(request: NextRequest) {
-  try {
-    const { pathname } = request.nextUrl;
+function isMachineRoute(pathname: string): boolean {
+  return pathname.startsWith("/webhooks/") || pathname.startsWith("/api/");
+}
 
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  if (isMachineRoute(pathname)) {
+    return NextResponse.next();
+  }
+
+  try {
     if (
       pathname.startsWith("/_next") ||
       pathname.startsWith("/favicon") ||
@@ -46,7 +54,7 @@ export async function middleware(request: NextRequest) {
       return NextResponse.next();
     }
 
-    if (pathname.startsWith("/api/") || pathname.startsWith("/backend")) {
+    if (pathname.startsWith("/backend")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -55,10 +63,11 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(login);
   } catch (error) {
     console.error("[AUTH] middleware soft-fail:", error);
-    if (
-      request.nextUrl.pathname.startsWith("/api/") ||
-      request.nextUrl.pathname.startsWith("/backend")
-    ) {
+    const failedPath = request.nextUrl.pathname;
+    if (isMachineRoute(failedPath)) {
+      return NextResponse.next();
+    }
+    if (failedPath.startsWith("/backend")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     return NextResponse.redirect(new URL("/login", request.url));

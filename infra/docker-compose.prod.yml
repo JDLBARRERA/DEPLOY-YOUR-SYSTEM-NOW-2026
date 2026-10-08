@@ -47,8 +47,8 @@ services:
       DOMAIN: ${DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}
     ports:
-      - "80:80"
-      - "443:443"
+      - "127.0.0.1:8080:80"
+      # Eliminamos el mapeo del 443
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

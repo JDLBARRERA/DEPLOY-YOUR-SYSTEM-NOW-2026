@@ -179,7 +179,7 @@ const worker = new Worker<DeployJobData>(
       }
       await ensureCaddyOnNetwork(deployNetwork);
 
-      const { variables, deploymentType } =
+      const { variables, deploymentType, memoryLimit, cpuLimit } =
         await variablesForDeployment(deploymentId);
       const runtimeEnv = selectEnv(variables, deploymentType);
       if (!runtimeEnv.DATABASE_URL?.trim()) {
@@ -189,7 +189,13 @@ const worker = new Worker<DeployJobData>(
       runtimeEnv.NODE_ENV = "production";
       const envFlags = dockerEnvFlags(runtimeEnv);
 
-      const limits = deployResourceLimits();
+      const limits = deployResourceLimits(
+        {
+          ...runtimeEnv,
+          ...(job.data.env ?? {}),
+        },
+        { memoryLimit, cpuLimit },
+      );
       await note(
         `Levantando contenedor ${containerName} en red ${deployNetwork} (sin -p; upstream ${upstream}; ${limits.memory} / ${limits.cpus} CPU)...`,
       );

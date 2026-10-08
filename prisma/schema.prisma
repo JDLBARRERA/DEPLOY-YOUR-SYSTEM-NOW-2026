@@ -88,6 +88,8 @@ model Project {
   name        String
   repoUrl     String
   branch      String       @default("main")
+  memoryLimit String       @default("256m")
+  cpuLimit    Float        @default(0.5)
   teamId      String
   team        Team         @relation(fields: [teamId], references: [id])
   envVars     Json         @default("{}")

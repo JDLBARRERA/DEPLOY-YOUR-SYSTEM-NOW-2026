@@ -6,6 +6,7 @@ import { createDeployQueue } from "./queues/deployQueue.js";
 import { deploymentRoutes } from "./routes/deployments.js";
 import { databaseRoutes } from "./routes/databases.js";
 import { deployRoutes } from "./routes/deploy.js";
+import { projectRoutes } from "./routes/projects.js";
 import { githubWebhookRoutes } from "./routes/githubWebhook.js";
 import { prisma } from "./db.js";
 import { DatabaseManagerService } from "./services/DatabaseManagerService.js";
@@ -83,6 +84,7 @@ const queue = createDeployQueue(redis);
 
 await app.register(cors, {
   origin: process.env.CORS_ORIGIN ?? "http://localhost:3000",
+  allowedHeaders: ["Content-Type", "Authorization", "x-api-key"],
 });
 
 app.get("/health", async () => ({
@@ -107,6 +109,7 @@ await app.register((scope) =>
   }),
 );
 await databaseRoutes(app, databases, containerDatabases);
+await projectRoutes(app);
 
 const docker = new Docker();
 try {
