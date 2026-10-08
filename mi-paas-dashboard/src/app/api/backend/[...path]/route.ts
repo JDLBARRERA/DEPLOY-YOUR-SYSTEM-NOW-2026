@@ -105,8 +105,19 @@ async function localFallback(
       memoryLimit?: string;
       cpuLimit?: number;
       githubToken?: string;
+      customDomain?: string;
     };
-    const updated = updateProjectLimits(id, body);
+    let updated: ReturnType<typeof updateProjectLimits>;
+    try {
+      updated = updateProjectLimits(id, body);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo guardar";
+      const status = message.includes("ya está asignado") ? 409 : 400;
+      return NextResponse.json(
+        { error: message },
+        { status, headers: { "x-dn-mode": "local" } },
+      );
+    }
     if (!updated) {
       return NextResponse.json(
         { error: "Proyecto no encontrado" },

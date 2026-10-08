@@ -1,4 +1,5 @@
 import http from "node:http";
+import { routeHosts } from "./customDomain.js";
 
 const DEFAULT_ADMIN_URL = "http://localhost:2019";
 
@@ -13,15 +14,22 @@ export class CaddyClient {
     projectId: string,
     host: string,
     upstream: string,
+    customDomain?: string | null,
   ): Promise<void> {
     const dial = upstream.trim();
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*:\d+$/.test(dial)) {
       throw new Error(`Upstream Caddy inválido: ${upstream}`);
     }
+    const hosts = routeHosts(host, customDomain);
+    for (const name of hosts) {
+      if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(name)) {
+        throw new Error(`Host Caddy inválido: ${name}`);
+      }
+    }
 
     const route = {
       "@id": `route-${projectId}`,
-      match: [{ host: [host] }],
+      match: [{ host: hosts }],
       handle: [
         {
           handler: "reverse_proxy",
@@ -34,7 +42,7 @@ export class CaddyClient {
 
     try {
       await this.adminRequest("PATCH", `/id/route-${projectId}`, body);
-      console.log(`Caddy: ruta actualizada para ${host} → ${dial}`);
+      console.log(`Caddy: ruta actualizada para ${hosts.join(", ")} → ${dial}`);
       return;
     } catch (error) {
       if (!isNotFound(error)) {
@@ -43,7 +51,7 @@ export class CaddyClient {
     }
 
     await this.adminRequest("POST", "/config/apps/http/servers/paas/routes/0", body);
-    console.log(`Caddy: ruta creada para ${host} → ${dial}`);
+    console.log(`Caddy: ruta creada para ${hosts.join(", ")} → ${dial}`);
   }
 
   async deleteRoute(projectId: string): Promise<void> {

@@ -47,6 +47,7 @@ export interface LocalProject {
   memoryLimit: string;
   cpuLimit: number;
   githubToken?: string | null;
+  customDomain?: string | null;
 }
 
 export interface PanelSettings {
@@ -316,6 +317,7 @@ export function listProjects(): LocalProject[] {
       memoryLimit: "256m",
       cpuLimit: 0.5,
       githubToken: null,
+      customDomain: null,
     });
   }
   return [...saved.values()]
@@ -326,9 +328,27 @@ export function listProjects(): LocalProject[] {
     }));
 }
 
+const LOCAL_HOSTNAME =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+function normalizeLocalDomain(value: string): string {
+  const host = value.trim().toLowerCase().replace(/\.$/, "");
+  if (!host || host.includes("://") || host.includes("/") || host.includes(":") || /\s/.test(host)) {
+    throw new Error("Escribe solo el dominio, por ejemplo app.cliente.com");
+  }
+  if (!LOCAL_HOSTNAME.test(host) || host === "deplowe-now.com" || host === "www.deplowe-now.com") {
+    throw new Error(
+      host === "deplowe-now.com" || host === "www.deplowe-now.com"
+        ? "Ese dominio pertenece al panel"
+        : "customDomain no es un dominio válido",
+    );
+  }
+  return host;
+}
+
 export function updateProjectLimits(
   id: string,
-  patch: { memoryLimit?: string; cpuLimit?: number; githubToken?: string },
+  patch: { memoryLimit?: string; cpuLimit?: number; githubToken?: string; customDomain?: string },
 ): Omit<LocalProject, "githubToken"> & { hasGithubToken: boolean } | null {
   const store = ensureStore();
   const saved = new Map((store.projects ?? []).map((project) => [project.id, project]));
@@ -345,7 +365,21 @@ export function updateProjectLimits(
     memoryLimit: current?.memoryLimit ?? "256m",
     cpuLimit: current?.cpuLimit ?? 0.5,
     githubToken: null,
+    customDomain: current?.customDomain ?? null,
   };
+  let customDomain = base.customDomain ?? null;
+  if (patch.customDomain !== undefined) {
+    const raw = patch.customDomain.trim();
+    customDomain = raw ? normalizeLocalDomain(raw) : null;
+    if (customDomain) {
+      const taken = [...saved.values()].some(
+        (project) => project.id !== id && project.customDomain?.toLowerCase() === customDomain,
+      );
+      if (taken) {
+        throw new Error("Ese dominio ya está asignado a otro proyecto");
+      }
+    }
+  }
   const next: LocalProject = {
     ...base,
     memoryLimit: patch.memoryLimit?.trim() || base.memoryLimit,
@@ -357,6 +391,7 @@ export function updateProjectLimits(
       patch.githubToken === undefined
         ? base.githubToken ?? null
         : patch.githubToken.trim() || null,
+    customDomain,
   };
   saved.set(id, next);
   store.projects = [...saved.values()];

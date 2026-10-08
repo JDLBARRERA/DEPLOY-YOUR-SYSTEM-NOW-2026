@@ -91,7 +91,7 @@ const worker = new Worker<DeployJobData>(
       fs.rmSync(repoDir, { recursive: true, force: true });
       fs.mkdirSync(repoDir, { recursive: true });
 
-      const { variables, deploymentType, memoryLimit, cpuLimit, githubToken } =
+      const { variables, deploymentType, memoryLimit, cpuLimit, githubToken, customDomain } =
         await variablesForDeployment(deploymentId);
 
       await note(`Clonando repositorio (rama ${branch})...`);
@@ -241,9 +241,14 @@ const worker = new Worker<DeployJobData>(
 
       let routed = false;
       try {
-        await caddy.upsertRoute(projectId, host, upstream);
+        const domainHost = deploymentType === "PRODUCTION" ? customDomain : null;
+        await caddy.upsertRoute(projectId, host, upstream, domainHost);
         routed = true;
-        await note(`Contenedor levantado y enrutado vía ${upstream}.`);
+        await note(
+          domainHost
+            ? `Contenedor levantado y enrutado vía ${upstream} (${host}, ${domainHost}).`
+            : `Contenedor levantado y enrutado vía ${upstream}.`,
+        );
       } catch (caddyError) {
         const caddyMessage = commandError(caddyError);
         await note(

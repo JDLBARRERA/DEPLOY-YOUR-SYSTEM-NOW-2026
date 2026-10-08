@@ -90,7 +90,8 @@ model Project {
   branch      String       @default("main")
   memoryLimit String       @default("256m")
   cpuLimit    Float        @default(0.5)
-  githubToken String?
+  githubToken  String?
+  customDomain String?      @unique
   teamId      String
   team        Team         @relation(fields: [teamId], references: [id])
   envVars     Json         @default("{}")

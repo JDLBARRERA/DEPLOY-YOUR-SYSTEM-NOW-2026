@@ -109,7 +109,7 @@ await app.register((scope) =>
   }),
 );
 await databaseRoutes(app, databases, containerDatabases);
-await projectRoutes(app);
+await projectRoutes(app, store);
 
 const docker = new Docker();
 try {

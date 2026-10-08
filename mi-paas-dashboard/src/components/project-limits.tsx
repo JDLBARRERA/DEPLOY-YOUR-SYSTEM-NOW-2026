@@ -14,6 +14,7 @@ export interface ProjectLimits {
   cpuLimit: number;
   hasGithubToken: boolean;
   githubToken: string;
+  customDomain: string;
 }
 
 const MEMORY_OPTIONS = ["256m", "512m", "1g", "2g"];
@@ -28,7 +29,13 @@ export function ProjectLimitsCard() {
     void apiFetch<ProjectLimits[]>("/projects")
       .then((next) => {
         if (!cancelled) {
-          setProjects(next.map((project) => ({ ...project, githubToken: "" })));
+          setProjects(
+            next.map((project) => ({
+              ...project,
+              githubToken: "",
+              customDomain: project.customDomain ?? "",
+            })),
+          );
         }
       })
       .catch((error: unknown) => {
@@ -45,7 +52,9 @@ export function ProjectLimitsCard() {
 
   function update(
     id: string,
-    patch: Partial<Pick<ProjectLimits, "memoryLimit" | "cpuLimit" | "githubToken" | "hasGithubToken">>,
+    patch: Partial<
+      Pick<ProjectLimits, "memoryLimit" | "cpuLimit" | "githubToken" | "hasGithubToken" | "customDomain">
+    >,
   ) {
     setProjects((current) =>
       current?.map((project) => (project.id === id ? { ...project, ...patch } : project)) ?? current,
@@ -76,11 +85,16 @@ export function ProjectLimitsCard() {
         body: JSON.stringify({
           memoryLimit: project.memoryLimit,
           cpuLimit: Number(project.cpuLimit),
+          customDomain: project.customDomain.trim(),
           ...(project.githubToken.trim() ? { githubToken: project.githubToken.trim() } : {}),
         }),
       });
-      update(project.id, { ...saved, githubToken: "" });
-      toast.success(`Límites de ${project.name} guardados`);
+      update(project.id, {
+        ...saved,
+        githubToken: "",
+        customDomain: saved.customDomain ?? "",
+      });
+      toast.success(`Configuración de ${project.name} guardada`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudieron guardar los límites");
     } finally {
@@ -113,6 +127,24 @@ export function ProjectLimitsCard() {
                 <p className="truncate font-semibold">{project.name}</p>
                 <p className="truncate text-xs text-slate-500">{project.repoUrl}</p>
               </div>
+              <label className="flex flex-col gap-1 text-xs">
+                Dominio personalizado
+                <input
+                  type="text"
+                  name="customDomain"
+                  inputMode="url"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={project.customDomain}
+                  placeholder="app.cliente.com"
+                  onChange={(event) => update(project.id, { customDomain: event.target.value })}
+                  className="rounded-md border border-white/70 bg-white/80 px-2 py-1.5 font-mono text-sm text-slate-900"
+                />
+                <span className="text-[11px] text-slate-500">
+                  Apunta ese dominio a este servidor. El subdominio del proyecto sigue activo y ambos llegan al mismo contenedor.
+                </span>
+              </label>
               <label className="flex flex-col gap-1 text-xs">
                 GitHub Access Token
                 <input
