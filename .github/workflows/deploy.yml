@@ -22,7 +22,7 @@ jobs:
           script_stop: true
           command_timeout: 20m
           script: |
-            # 1. Configurar rutas de Node, NPM y PM2
+            echo "=== [PASO 1] Cargar rutas de Node y PM2 ==="
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
             export PATH="$PATH:/usr/local/bin:/usr/bin:$HOME/.local/bin"
@@ -34,9 +34,9 @@ jobs:
             fi
 
             set -e
-            cd ~
 
-            # 2. Descargar o actualizar código
+            echo "=== [PASO 2] Actualizar código desde GitHub ==="
+            cd ~
             if [ -d DEPLOY-YOUR-SYSTEM-NOW-2026/.git ]; then
               cd DEPLOY-YOUR-SYSTEM-NOW-2026
               git fetch origin main
@@ -46,14 +46,13 @@ jobs:
               cd DEPLOY-YOUR-SYSTEM-NOW-2026
             fi
 
-            # 3. Preparar e instalar Next.js
+            echo "=== [PASO 3] Instalar dependencias y compilar Next.js ==="
             cd mi-paas-dashboard
             cp ~/mi-paas/.env .env || true
             npm install
-
-            # Compilar limitando consumo de RAM
             NODE_OPTIONS="--max-old-space-size=1536" npm run build
 
-            # 4. Reiniciar servicio en PM2
+            echo "=== [PASO 4] Reiniciar servidor con PM2 ==="
             pm2 restart paas-dashboard || pm2 start npm --name "paas-dashboard" -- run start -- -p 3000
             pm2 save || true
+            echo "=== DESPLIEGUE COMPLETADO ==="
