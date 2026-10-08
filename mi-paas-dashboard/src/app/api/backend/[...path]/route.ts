@@ -2,9 +2,15 @@ import { NextResponse } from "next/server";
 import {
   createDatabase,
   createDeployment,
+  deleteDatabase,
+  getSettings,
+  isSqliteUrl,
   listDatabases,
   listDeployments,
   redeploy,
+  saveSettings,
+  type EnvPair,
+  type PanelSettings,
 } from "@/lib/local-store";
 import { tryUpstream } from "@/lib/upstream";
 
@@ -15,28 +21,44 @@ async function handle(request: Request, context: Ctx): Promise<Response> {
   const segments = path ?? [];
   const joined = segments.join("/");
   const method = request.method.toUpperCase();
+  const isDatabasesRoute = segments[0] === "databases";
+  const isSettingsRoute = segments[0] === "settings";
+  const forceLocal =
+    isSettingsRoute || (isDatabasesRoute && isSqliteUrl());
 
-  // Intenta motor remoto/producción primero; si falla, modo local.
   let bodyText: string | undefined;
   if (method !== "GET" && method !== "HEAD") {
     bodyText = await request.text();
   }
 
-  const upstream = await tryUpstream(joined + new URL(request.url).search, {
-    method,
-    body: bodyText,
-    headers: {
-      Accept: request.headers.get("Accept") ?? "application/json",
-    },
-  });
-
-  if (upstream && upstream.status < 500) {
-    const headers = new Headers(upstream.headers);
-    headers.set("x-dn-mode", "upstream");
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers,
+  if (!forceLocal) {
+    const upstream = await tryUpstream(joined + new URL(request.url).search, {
+      method,
+      body: bodyText,
+      headers: {
+        Accept: request.headers.get("Accept") ?? "application/json",
+      },
     });
+
+    if (upstream && upstream.status < 500) {
+      // DELETE de databases puede no existir en el motor; caer a local.
+      if (
+        !(
+          isDatabasesRoute &&
+          method === "DELETE" &&
+          (upstream.status === 404 ||
+            upstream.status === 405 ||
+            upstream.status === 501)
+        )
+      ) {
+        const headers = new Headers(upstream.headers);
+        headers.set("x-dn-mode", "upstream");
+        return new Response(upstream.body, {
+          status: upstream.status,
+          headers,
+        });
+      }
+    }
   }
 
   return localFallback(method, segments, bodyText);
@@ -68,6 +90,27 @@ async function localFallback(
     );
   }
 
+  if (method === "GET" && head === "settings" && !id) {
+    return NextResponse.json(getSettings(), {
+      headers: { "x-dn-mode": "local" },
+    });
+  }
+
+  if (
+    (method === "PUT" || method === "POST" || method === "PATCH") &&
+    head === "settings" &&
+    !id
+  ) {
+    const body = parseJson(bodyText) as Partial<PanelSettings> & {
+      globalEnv?: EnvPair[];
+    };
+    const saved = saveSettings(body);
+    return NextResponse.json(saved, {
+      status: 200,
+      headers: { "x-dn-mode": "local" },
+    });
+  }
+
   if (method === "POST" && head === "deploy") {
     const body = parseJson(bodyText) as {
       repoUrl?: string;
@@ -94,21 +137,42 @@ async function localFallback(
   }
 
   if (method === "POST" && head === "databases" && !id) {
-    const body = parseJson(bodyText) as { name?: string; type?: string };
+    const body = parseJson(bodyText) as {
+      name?: string;
+      type?: string;
+      password?: string;
+    };
     if (!body.name) {
       return NextResponse.json({ error: "name es requerido" }, { status: 400 });
     }
-    const created = createDatabase({ name: body.name, type: body.type });
+    const created = createDatabase({
+      name: body.name,
+      type: body.type,
+      password: body.password,
+    });
     return NextResponse.json(
       { ...created, DATABASE_URL: created.DATABASE_URL },
       { status: 201, headers: { "x-dn-mode": "local" } },
     );
   }
 
+  if (method === "DELETE" && head === "databases" && id && !action) {
+    const ok = deleteDatabase(id);
+    if (!ok) {
+      return NextResponse.json(
+        { error: "Base de datos no encontrada" },
+        { status: 404, headers: { "x-dn-mode": "local" } },
+      );
+    }
+    return NextResponse.json(
+      { ok: true },
+      { status: 200, headers: { "x-dn-mode": "local" } },
+    );
+  }
+
   if (method === "POST" && head === "deployments" && id && action === "redeploy") {
     const result = redeploy(id);
     if (!result) {
-      // Re-encola desde lista si el id no es local
       return NextResponse.json(
         {
           error:

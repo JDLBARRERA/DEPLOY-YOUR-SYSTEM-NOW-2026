@@ -7,7 +7,6 @@ import {
 } from "@/lib/auth";
 
 const PUBLIC_PATHS = new Set(["/login", "/api/login", "/api/auth/login"]);
-const DEFAULT_PASSWORD = "admin";
 
 export async function middleware(request: NextRequest) {
   try {
@@ -37,9 +36,7 @@ export async function middleware(request: NextRequest) {
       request.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
     if (
       presented &&
-      (presented === apiKey ||
-        presented === password ||
-        presented === DEFAULT_PASSWORD)
+      ((apiKey && presented === apiKey) || (password && presented === password))
     ) {
       return NextResponse.next();
     }
@@ -58,8 +55,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(login);
   } catch (error) {
     console.error("[AUTH] middleware soft-fail:", error);
-    // En desarrollo no tumbar la app por env faltante; redirigir a login.
-    if (request.nextUrl.pathname.startsWith("/api/") || request.nextUrl.pathname.startsWith("/backend")) {
+    if (
+      request.nextUrl.pathname.startsWith("/api/") ||
+      request.nextUrl.pathname.startsWith("/backend")
+    ) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     return NextResponse.redirect(new URL("/login", request.url));

@@ -12,6 +12,22 @@ export interface Deployment {
 
 export type DatabaseEngine = "postgres" | "mysql" | "redis";
 
+export interface EnvPair {
+  key: string;
+  value: string;
+}
+
+export interface PanelSettings {
+  githubPat: string;
+  adminPassword: string;
+  domain: string;
+  dropletIp: string;
+  caddySslEnabled: boolean;
+  caddyStatus: "active" | "inactive" | "unknown";
+  globalEnv: EnvPair[];
+  updatedAt: string;
+}
+
 export interface Database {
   id: string;
   name: string;

@@ -129,6 +129,7 @@ export function WinField({
   required,
   placeholder,
   defaultValue,
+  type = "text",
 }: {
   id: string;
   label: string;
@@ -136,6 +137,7 @@ export function WinField({
   required?: boolean;
   placeholder?: string;
   defaultValue?: string;
+  type?: "text" | "password" | "url";
 }) {
   return (
     <label htmlFor={id} className="flex flex-col gap-1 text-sm">
@@ -143,6 +145,7 @@ export function WinField({
       <input
         id={id}
         name={name}
+        type={type}
         required={required}
         placeholder={placeholder}
         defaultValue={defaultValue}

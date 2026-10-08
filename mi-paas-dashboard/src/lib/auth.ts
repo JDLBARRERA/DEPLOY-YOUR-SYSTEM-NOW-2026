@@ -1,28 +1,26 @@
 export const SESSION_COOKIE = "dn_session";
 const SESSION_PAYLOAD = "deplowe-now-session-v1";
-const DEFAULT_SECRET = "deplowe_now_secret_2026";
-const DEFAULT_PASSWORD = "admin";
 
 /**
- * Secret de firma de sesión (local + producción).
- * NEXTAUTH_SECRET || ADMIN_PASSWORD || fallback fijo.
+ * Secret de firma de sesión.
+ * NEXTAUTH_SECRET || ADMIN_PASSWORD (sin fallbacks de desarrollo).
  */
 export function authSecret(): string {
   return (
     process.env.NEXTAUTH_SECRET?.trim() ||
     process.env.ADMIN_PASSWORD?.trim() ||
-    DEFAULT_SECRET
+    ""
   );
 }
 
-/** Contraseña esperada (ADMIN_PASSWORD o 'admin'). */
+/** Contraseña esperada: solo process.env.ADMIN_PASSWORD. */
 export function adminPassword(): string {
-  return (process.env.ADMIN_PASSWORD || DEFAULT_PASSWORD).trim();
+  return (process.env.ADMIN_PASSWORD || "").trim();
 }
 
 /**
  * Clave para header x-api-key / Bearer.
- * Usa ADMIN_API_KEY si existe; si no, la misma contraseña esperada.
+ * Usa ADMIN_API_KEY si existe; si no, ADMIN_PASSWORD.
  */
 export function adminApiKey(): string {
   const key = process.env.ADMIN_API_KEY?.trim();
@@ -60,7 +58,11 @@ async function hmacSign(secret: string, message: string): Promise<string> {
 }
 
 export async function createSessionValue(): Promise<string> {
-  return hmacSign(authSecret(), SESSION_PAYLOAD);
+  const secret = authSecret();
+  if (!secret) {
+    throw new Error("[AUTH ERROR] ADMIN_PASSWORD/NEXTAUTH_SECRET no está definida");
+  }
+  return hmacSign(secret, SESSION_PAYLOAD);
 }
 
 export async function isValidSessionValue(
@@ -85,12 +87,17 @@ export async function isValidSessionValue(
 }
 
 export function isValidPassword(input: string | undefined | null): boolean {
+  const expectedPassword = (process.env.ADMIN_PASSWORD || "").trim();
   const inputPassword = (input || "").trim();
-  const expectedPassword = adminPassword();
-  return (
-    inputPassword.length > 0 &&
-    (inputPassword === expectedPassword || inputPassword === DEFAULT_PASSWORD)
-  );
+
+  if (!expectedPassword) {
+    console.error(
+      "[AUTH ERROR] ADMIN_PASSWORD no está definida en process.env",
+    );
+    return false;
+  }
+
+  return inputPassword.length > 0 && inputPassword === expectedPassword;
 }
 
 export async function isAuthorizedRequest(request: Request): Promise<boolean> {
@@ -98,15 +105,17 @@ export async function isAuthorizedRequest(request: Request): Promise<boolean> {
     const password = adminPassword();
     const apiKey = adminApiKey();
 
+    if (!password && !process.env.ADMIN_API_KEY?.trim()) {
+      console.error(
+        "[AUTH ERROR] ADMIN_PASSWORD no está definida en process.env",
+      );
+      return false;
+    }
+
     const presented =
       request.headers.get("x-api-key")?.trim() ||
       request.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
-    if (
-      presented &&
-      (presented === apiKey ||
-        presented === password ||
-        presented === DEFAULT_PASSWORD)
-    ) {
+    if (presented && ((apiKey && presented === apiKey) || (password && presented === password))) {
       return true;
     }
 

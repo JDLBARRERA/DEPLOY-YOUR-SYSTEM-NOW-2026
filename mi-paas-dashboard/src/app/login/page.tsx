@@ -64,7 +64,7 @@ function LoginForm() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               className="rounded-md border border-white/70 bg-white/80 px-2 py-1.5 text-slate-900 shadow-[inset_0_1px_3px_rgba(0,0,0,0.15)] outline-none"
-              placeholder="admin"
+              placeholder="ADMIN_PASSWORD"
             />
           </label>
           {error ? <p className="text-sm text-red-700">{error}</p> : null}

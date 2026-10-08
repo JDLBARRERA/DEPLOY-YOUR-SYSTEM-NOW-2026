@@ -1,14 +1,9 @@
 import { NextResponse } from "next/server";
-import {
-  SESSION_COOKIE,
-  adminPassword,
-  createSessionValue,
-  isValidPassword,
-} from "@/lib/auth";
+import { SESSION_COOKIE, createSessionValue } from "@/lib/auth";
 
 export async function handleLogin(request: Request): Promise<NextResponse> {
   try {
-    const expectedPassword = adminPassword();
+    const expectedPassword = (process.env.ADMIN_PASSWORD || "").trim();
 
     let credentialsPassword = "";
     const contentType = request.headers.get("content-type") ?? "";
@@ -24,14 +19,17 @@ export async function handleLogin(request: Request): Promise<NextResponse> {
 
     const inputPassword = (credentialsPassword || "").trim();
 
-    console.log(
-      "[AUTH DEBUG] Ingresado:",
-      inputPassword,
-      "| Esperado:",
-      expectedPassword,
-    );
+    if (!expectedPassword) {
+      console.error(
+        "[AUTH ERROR] ADMIN_PASSWORD no está definida en process.env",
+      );
+      return NextResponse.json(
+        { error: "Autenticación no configurada" },
+        { status: 500 },
+      );
+    }
 
-    if (!isValidPassword(inputPassword)) {
+    if (inputPassword !== expectedPassword) {
       return NextResponse.json(
         { error: "Credenciales inválidas" },
         { status: 401 },
