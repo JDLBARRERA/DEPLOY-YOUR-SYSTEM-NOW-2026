@@ -1,18 +1,38 @@
-name: Deploy to Droplet
+name: Deploy dashboard to Droplet
 
 on:
   push:
     branches:
       - main
 
+concurrency:
+  group: deploy-dashboard-main
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Deploy mi-paas-dashboard over SSH
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DROPLET_IP }}
           username: root
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          script: cd ~/mi-paas && git pull origin main && npm install && npm run build && pm2 restart mi-paas
+          password: ${{ secrets.DROPLET_PASSWORD }}
+          script_stop: true
+          script: |
+            set -e
+            cd ~
+            if [ -d DEPLOY-YOUR-SYSTEM-NOW-2026/.git ]; then
+              cd DEPLOY-YOUR-SYSTEM-NOW-2026
+              git fetch origin main
+              git reset --hard origin/main
+            else
+              git clone https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git
+              cd DEPLOY-YOUR-SYSTEM-NOW-2026
+            fi
+            cd mi-paas-dashboard
+            cp ~/mi-paas/.env .env
+            npm install
+            npm run build
+            pm2 restart paas-dashboard || pm2 start npm --name "paas-dashboard" -- run start -- -p 3000
