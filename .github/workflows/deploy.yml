@@ -37,22 +37,26 @@ jobs:
             echo "node=$(command -v node || echo missing) $(node -v 2>/dev/null || true)"
             echo "npm=$(command -v npm || echo missing) $(npm -v 2>/dev/null || true)"
             echo "pm2=$(command -v pm2 || echo missing)"
+            echo "git=$(command -v git || echo missing)"
 
             set -e
 
             echo "=== [PASO 2] Actualizar código desde GitHub ==="
-            cd ~
-            git config --global --add safe.directory "*"
+            cd "$HOME"
             REPO_DIR="$HOME/DEPLOY-YOUR-SYSTEM-NOW-2026"
+            echo "HOME=$HOME REPO_DIR=$REPO_DIR"
+            # No usar safe.directory "*": el asterisco se expande y tumba el script.
+            git config --global --add safe.directory "$REPO_DIR" || true
+
             if [ -d "$REPO_DIR/.git" ]; then
-              echo "Repo git detectado en $REPO_DIR"
+              echo "Repo git detectado"
               cd "$REPO_DIR"
               git remote set-url origin https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git
               git fetch origin main
               git checkout -B main origin/main
               git reset --hard origin/main
             else
-              echo "Clonando repo limpio en $REPO_DIR"
+              echo "Clonando repo limpio"
               rm -rf "$REPO_DIR"
               git clone --branch main https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git "$REPO_DIR"
               cd "$REPO_DIR"
@@ -62,7 +66,7 @@ jobs:
 
             echo "=== [PASO 3] Instalar dependencias y compilar Next.js ==="
             cd mi-paas-dashboard
-            cp ~/mi-paas/.env .env || true
+            cp "$HOME/mi-paas/.env" .env || true
             npm install
             NODE_OPTIONS="--max-old-space-size=1536" npm run build
 
