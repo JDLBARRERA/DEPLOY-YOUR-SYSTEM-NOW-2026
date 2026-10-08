@@ -24,14 +24,20 @@ jobs:
           script: |
             echo "=== [PASO 1] Cargar rutas de Node y PM2 ==="
             export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            # Importante: no usar "test && source" suelto; con script_stop=true un test fallido mata el job.
+            if [ -s "$NVM_DIR/nvm.sh" ]; then
+              . "$NVM_DIR/nvm.sh"
+            fi
             export PATH="$PATH:/usr/local/bin:/usr/bin:$HOME/.local/bin"
             if [ -d "$HOME/.nvm/versions/node" ]; then
-              LATEST_NODE="$(ls "$HOME/.nvm/versions/node" 2>/dev/null | tail -n 1)"
+              LATEST_NODE="$(ls "$HOME/.nvm/versions/node" 2>/dev/null | tail -n 1 || true)"
               if [ -n "$LATEST_NODE" ]; then
                 export PATH="$PATH:$HOME/.nvm/versions/node/$LATEST_NODE/bin"
               fi
             fi
+            echo "node=$(command -v node || echo missing) $(node -v 2>/dev/null || true)"
+            echo "npm=$(command -v npm || echo missing) $(npm -v 2>/dev/null || true)"
+            echo "pm2=$(command -v pm2 || echo missing)"
 
             set -e
 
