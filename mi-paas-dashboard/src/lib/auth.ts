@@ -1,9 +1,9 @@
 export const SESSION_COOKIE = "dn_session";
 const SESSION_PAYLOAD = "deplowe-now-session-v1";
 
-/** Contraseña de login (solo ADMIN_PASSWORD). */
+/** Contraseña de login (ADMIN_PASSWORD, fallback local admin123). */
 export function adminPassword(): string {
-  return process.env.ADMIN_PASSWORD?.trim() || "";
+  return (process.env.ADMIN_PASSWORD || "admin123").trim();
 }
 
 /**

@@ -29,17 +29,6 @@ export async function middleware(request: NextRequest) {
 
   const password = adminPassword();
   const apiKey = adminApiKey();
-  if (!password) {
-    if (pathname.startsWith("/api/") || pathname.startsWith("/backend")) {
-      return NextResponse.json(
-        { error: "Unauthorized: configura ADMIN_PASSWORD" },
-        { status: 401 },
-      );
-    }
-    const login = new URL("/login", request.url);
-    login.searchParams.set("error", "missing-secret");
-    return NextResponse.redirect(login);
-  }
 
   const presented =
     request.headers.get("x-api-key")?.trim() ||

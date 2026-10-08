@@ -9,11 +9,7 @@ function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const [password, setPassword] = useState("");
-  const [error, setError] = useState(
-    params.get("error") === "missing-secret"
-      ? "Configura ADMIN_PASSWORD en mi-paas-dashboard/.env.local"
-      : "",
-  );
+  const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
