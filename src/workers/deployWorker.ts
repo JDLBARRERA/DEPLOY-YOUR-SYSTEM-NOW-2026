@@ -16,6 +16,7 @@ import {
   assertPublicGitHubRepo,
   deployResourceLimits,
   githubCloneUrl,
+  redactSecrets,
   normalizeImageName,
 } from "../services/DeployEngine.js";
 import { DEPLOY_QUEUE_NAME, type DeployJobData } from "../queues/deployQueue.js";
@@ -90,8 +91,11 @@ const worker = new Worker<DeployJobData>(
       fs.rmSync(repoDir, { recursive: true, force: true });
       fs.mkdirSync(repoDir, { recursive: true });
 
+      const { variables, deploymentType, memoryLimit, cpuLimit, githubToken } =
+        await variablesForDeployment(deploymentId);
+
       await note(`Clonando repositorio (rama ${branch})...`);
-      const cloneUrl = githubCloneUrl(repoUrl);
+      const cloneUrl = githubCloneUrl(repoUrl, githubToken);
       execSync(`git clone -b "${branch}" --single-branch "${cloneUrl}" .`, {
         cwd: repoDir,
         stdio: "pipe",
@@ -179,8 +183,6 @@ const worker = new Worker<DeployJobData>(
       }
       await ensureCaddyOnNetwork(deployNetwork);
 
-      const { variables, deploymentType, memoryLimit, cpuLimit } =
-        await variablesForDeployment(deploymentId);
       const runtimeEnv = selectEnv(variables, deploymentType);
       if (!runtimeEnv.DATABASE_URL?.trim()) {
         runtimeEnv.DATABASE_URL = DEFAULT_RUNTIME_DATABASE_URL;
@@ -268,7 +270,7 @@ const worker = new Worker<DeployJobData>(
         );
       }
     } catch (error) {
-      const message = commandError(error);
+      const message = redactSecrets(commandError(error));
       console.error(message);
       lines.push(message);
       await logs.append(projectId, message);
@@ -289,7 +291,9 @@ const worker = new Worker<DeployJobData>(
 );
 
 worker.on("failed", (job, error) => {
-  console.error(`Deploy job ${job?.id ?? "unknown"} failed: ${error.message}`);
+  console.error(
+    `Deploy job ${job?.id ?? "unknown"} failed: ${redactSecrets(error.message)}`,
+  );
 });
 
 console.log(`Deploy worker listening with concurrency ${concurrency}`);

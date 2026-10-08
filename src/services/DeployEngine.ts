@@ -31,6 +31,7 @@ export interface DeployRequest {
   deploymentType?: DeploymentEnvType;
   memoryLimit?: string | null;
   cpuLimit?: number | null;
+  githubToken?: string | null;
   onLog?: (line: string) => void;
 }
 
@@ -79,16 +80,16 @@ export function assertPublicGitHubRepo(repoUrl: string): void {
 }
 
 /**
- * Inyecta GITHUB_PAT para clonar repos privados.
- * Si la URL ya trae credenciales (@github.com) o no hay PAT, deja el fallback HTTPS.
- * No registrar el resultado en logs (contiene el token).
+ * Inyecta el token del proyecto, o GITHUB_PAT si el proyecto no tiene uno.
+ * Si la URL ya trae credenciales, no la modifica.
+ * No registrar el resultado: contiene el token.
  */
-export function githubCloneUrl(repoUrl: string): string {
+export function githubCloneUrl(repoUrl: string, token?: string | null): string {
   assertPublicGitHubRepo(repoUrl);
   if (/^https:\/\/[^/\s]+@github\.com\//i.test(repoUrl)) {
     return repoUrl;
   }
-  const pat = process.env.GITHUB_PAT?.trim();
+  const pat = token?.trim() || process.env.GITHUB_PAT?.trim();
   if (!pat) {
     return repoUrl;
   }
@@ -96,6 +97,10 @@ export function githubCloneUrl(repoUrl: string): string {
     /^https:\/\/github\.com\//i,
     `https://${encodeURIComponent(pat)}@github.com/`,
   );
+}
+
+export function redactSecrets(text: string): string {
+  return text.replace(/https:\/\/[^@\s/]+@github\.com/gi, "https://***@github.com");
 }
 
 const DEFAULT_MEMORY = "256m";
@@ -268,12 +273,18 @@ export class DeployEngine {
       const cloneOptions = input.branch
         ? ["--branch", input.branch, "--single-branch"]
         : undefined;
-      await simpleGit()
-        .outputHandler((_command, stdout, stderr) => {
-          streamLines(stdout, onLog);
-          streamLines(stderr, onLog);
-        })
-        .clone(githubCloneUrl(input.repoUrl), workDir, cloneOptions);
+      const safeLog = (line: string) => onLog(redactSecrets(line));
+      try {
+        await simpleGit()
+          .outputHandler((_command, stdout, stderr) => {
+            streamLines(stdout, safeLog);
+            streamLines(stderr, safeLog);
+          })
+          .clone(githubCloneUrl(input.repoUrl, input.githubToken), workDir, cloneOptions);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "git clone failed";
+        throw new Error(redactSecrets(message));
+      }
 
       commitHash = (await simpleGit(workDir).revparse(["HEAD"])).trim();
       const envKeys = Object.keys(env);

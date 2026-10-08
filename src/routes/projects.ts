@@ -11,8 +11,30 @@ const updateSchema = {
   properties: {
     memoryLimit: { type: "string", minLength: 2, maxLength: 16 },
     cpuLimit: { type: "number", minimum: 0.05, maximum: 16 },
+    githubToken: { type: "string", maxLength: 300 },
   },
 } as const;
+
+const projectSelect = {
+  id: true,
+  name: true,
+  repoUrl: true,
+  branch: true,
+  memoryLimit: true,
+  cpuLimit: true,
+  githubToken: true,
+} as const;
+
+function publicProject<T extends { githubToken: string | null }>(
+  project: T,
+): Omit<T, "githubToken"> & { hasGithubToken: boolean } {
+  const { githubToken, ...rest } = project;
+  return { ...rest, hasGithubToken: Boolean(githubToken?.trim()) };
+}
+
+function validToken(value: string): boolean {
+  return value.length > 0 && value.length <= 300 && !/[\s@]/.test(value);
+}
 
 function validMemory(value: string): boolean {
   const trimmed = value.trim();
@@ -26,27 +48,24 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
   app.get("/projects", { preValidation: requireAdmin }, async () => {
     const projects = await prisma.project.findMany({
       orderBy: { name: "asc" },
-      select: {
-        id: true,
-        name: true,
-        repoUrl: true,
-        branch: true,
-        memoryLimit: true,
-        cpuLimit: true,
-      },
+      select: projectSelect,
     });
-    return projects;
+    return projects.map(publicProject);
   });
 
   app.patch<{
     Params: { id: string };
-    Body: { memoryLimit?: string; cpuLimit?: number };
+    Body: { memoryLimit?: string; cpuLimit?: number; githubToken?: string };
   }>(
     "/projects/:id",
     { schema: { body: updateSchema }, preValidation: requireAdmin },
     async (request, reply) => {
       const memoryLimit = request.body.memoryLimit?.trim();
       const cpuLimit = request.body.cpuLimit;
+      const githubToken =
+        request.body.githubToken === undefined
+          ? undefined
+          : request.body.githubToken.trim();
       if (memoryLimit !== undefined && !validMemory(memoryLimit)) {
         return reply.code(400).send({
           error: "memoryLimit debe ser una cantidad como 256m, 512m o 1g",
@@ -60,8 +79,13 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
           error: "cpuLimit debe ser un número entre 0 y 16",
         });
       }
-      if (memoryLimit === undefined && cpuLimit === undefined) {
-        return reply.code(400).send({ error: "No hay límites para actualizar" });
+      if (githubToken !== undefined && githubToken.length > 0 && !validToken(githubToken)) {
+        return reply.code(400).send({
+          error: "githubToken no es un token válido",
+        });
+      }
+      if (memoryLimit === undefined && cpuLimit === undefined && githubToken === undefined) {
+        return reply.code(400).send({ error: "No hay cambios para guardar" });
       }
 
       try {
@@ -70,17 +94,11 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
           data: {
             ...(memoryLimit !== undefined ? { memoryLimit } : {}),
             ...(cpuLimit !== undefined ? { cpuLimit } : {}),
+            ...(githubToken !== undefined ? { githubToken: githubToken || null } : {}),
           },
-          select: {
-            id: true,
-            name: true,
-            repoUrl: true,
-            branch: true,
-            memoryLimit: true,
-            cpuLimit: true,
-          },
+          select: projectSelect,
         });
-        return updated;
+        return publicProject(updated);
       } catch {
         return reply.code(404).send({ error: "Proyecto no encontrado" });
       }

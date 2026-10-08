@@ -46,6 +46,7 @@ export interface LocalProject {
   branch: string;
   memoryLimit: string;
   cpuLimit: number;
+  githubToken?: string | null;
 }
 
 export interface PanelSettings {
@@ -314,32 +315,54 @@ export function listProjects(): LocalProject[] {
       branch: deployment.branch || "main",
       memoryLimit: "256m",
       cpuLimit: 0.5,
+      githubToken: null,
     });
   }
-  return [...saved.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...saved.values()]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(({ githubToken, ...project }) => ({
+      ...project,
+      hasGithubToken: Boolean(githubToken?.trim()),
+    }));
 }
 
 export function updateProjectLimits(
   id: string,
-  patch: { memoryLimit?: string; cpuLimit?: number },
-): LocalProject | null {
+  patch: { memoryLimit?: string; cpuLimit?: number; githubToken?: string },
+): Omit<LocalProject, "githubToken"> & { hasGithubToken: boolean } | null {
   const store = ensureStore();
-  const projects = listProjects();
-  const current = projects.find((project) => project.id === id);
-  if (!current) {
+  const saved = new Map((store.projects ?? []).map((project) => [project.id, project]));
+  const current = listProjects().find((project) => project.id === id);
+  const stored = saved.get(id);
+  if (!current && !stored) {
     return null;
   }
+  const base = stored ?? {
+    id,
+    name: current?.name ?? id,
+    repoUrl: current?.repoUrl ?? "",
+    branch: current?.branch ?? "main",
+    memoryLimit: current?.memoryLimit ?? "256m",
+    cpuLimit: current?.cpuLimit ?? 0.5,
+    githubToken: null,
+  };
   const next: LocalProject = {
-    ...current,
-    memoryLimit: patch.memoryLimit?.trim() || current.memoryLimit,
+    ...base,
+    memoryLimit: patch.memoryLimit?.trim() || base.memoryLimit,
     cpuLimit:
       patch.cpuLimit != null && Number.isFinite(patch.cpuLimit)
         ? patch.cpuLimit
-        : current.cpuLimit,
+        : base.cpuLimit,
+    githubToken:
+      patch.githubToken === undefined
+        ? base.githubToken ?? null
+        : patch.githubToken.trim() || null,
   };
-  store.projects = projects.map((project) => (project.id === id ? next : project));
+  saved.set(id, next);
+  store.projects = [...saved.values()];
   saveStore(store);
-  return next;
+  const { githubToken, ...project } = next;
+  return { ...project, hasGithubToken: Boolean(githubToken?.trim()) };
 }
 
 export function listDatabases(): LocalDatabase[] {

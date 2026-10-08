@@ -12,6 +12,8 @@ export interface ProjectLimits {
   branch: string;
   memoryLimit: string;
   cpuLimit: number;
+  hasGithubToken: boolean;
+  githubToken: string;
 }
 
 const MEMORY_OPTIONS = ["256m", "512m", "1g", "2g"];
@@ -25,7 +27,9 @@ export function ProjectLimitsCard() {
     let cancelled = false;
     void apiFetch<ProjectLimits[]>("/projects")
       .then((next) => {
-        if (!cancelled) setProjects(next);
+        if (!cancelled) {
+          setProjects(next.map((project) => ({ ...project, githubToken: "" })));
+        }
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -39,10 +43,29 @@ export function ProjectLimitsCard() {
     };
   }, []);
 
-  function update(id: string, patch: Partial<Pick<ProjectLimits, "memoryLimit" | "cpuLimit">>) {
+  function update(
+    id: string,
+    patch: Partial<Pick<ProjectLimits, "memoryLimit" | "cpuLimit" | "githubToken" | "hasGithubToken">>,
+  ) {
     setProjects((current) =>
       current?.map((project) => (project.id === id ? { ...project, ...patch } : project)) ?? current,
     );
+  }
+
+  async function clearToken(project: ProjectLimits) {
+    setSavingId(project.id);
+    try {
+      const saved = await apiFetch<ProjectLimits>(`/projects/${encodeURIComponent(project.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ githubToken: "" }),
+      });
+      update(project.id, { ...saved, githubToken: "" });
+      toast.success(`Token de ${project.name} eliminado`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo quitar el token");
+    } finally {
+      setSavingId(null);
+    }
   }
 
   async function save(project: ProjectLimits) {
@@ -53,9 +76,10 @@ export function ProjectLimitsCard() {
         body: JSON.stringify({
           memoryLimit: project.memoryLimit,
           cpuLimit: Number(project.cpuLimit),
+          ...(project.githubToken.trim() ? { githubToken: project.githubToken.trim() } : {}),
         }),
       });
-      update(project.id, saved);
+      update(project.id, { ...saved, githubToken: "" });
       toast.success(`Límites de ${project.name} guardados`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudieron guardar los límites");
@@ -79,7 +103,7 @@ export function ProjectLimitsCard() {
           {projects.map((project) => (
             <form
               key={project.id}
-              className="grid items-end gap-2 rounded-md border border-white/60 bg-white/50 p-3 sm:grid-cols-[1fr_8rem_8rem_auto]"
+              className="flex flex-col gap-2 rounded-md border border-white/60 bg-white/50 p-3"
               onSubmit={(event) => {
                 event.preventDefault();
                 void save(project);
@@ -89,6 +113,22 @@ export function ProjectLimitsCard() {
                 <p className="truncate font-semibold">{project.name}</p>
                 <p className="truncate text-xs text-slate-500">{project.repoUrl}</p>
               </div>
+              <label className="flex flex-col gap-1 text-xs">
+                GitHub Access Token
+                <input
+                  type="password"
+                  name="githubToken"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  value={project.githubToken}
+                  placeholder={
+                    project.hasGithubToken ? "Token guardado. Escribe otro para reemplazarlo." : "ghp_…"
+                  }
+                  onChange={(event) => update(project.id, { githubToken: event.target.value })}
+                  className="rounded-md border border-white/70 bg-white/80 px-2 py-1.5 font-mono text-sm text-slate-900"
+                />
+              </label>
+              <div className="grid items-end gap-2 sm:grid-cols-[8rem_8rem_auto_auto]">
               <label className="flex flex-col gap-1 text-xs">
                 RAM
                 <select
@@ -117,9 +157,22 @@ export function ProjectLimitsCard() {
                   ))}
                 </select>
               </label>
+              {project.hasGithubToken ? (
+                <button
+                  type="button"
+                  className="text-left text-xs text-sky-800 underline"
+                  disabled={savingId === project.id}
+                  onClick={() => void clearToken(project)}
+                >
+                  Quitar token
+                </button>
+              ) : (
+                <span />
+              )}
               <WinButton type="submit" disabled={savingId === project.id}>
                 {savingId === project.id ? "Guardando..." : "Guardar"}
               </WinButton>
+              </div>
             </form>
           ))}
         </div>

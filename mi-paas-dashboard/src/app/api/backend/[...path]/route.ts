@@ -104,6 +104,7 @@ async function localFallback(
     const body = parseJson(bodyText) as {
       memoryLimit?: string;
       cpuLimit?: number;
+      githubToken?: string;
     };
     const updated = updateProjectLimits(id, body);
     if (!updated) {

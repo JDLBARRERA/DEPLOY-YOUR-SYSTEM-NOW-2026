@@ -52,6 +52,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
   deploymentType: DeploymentEnvType;
   memoryLimit: string;
   cpuLimit: number;
+  githubToken: string | null;
 }> {
   if (!deploymentId) {
     return {
@@ -59,6 +60,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
       deploymentType: "PRODUCTION",
       memoryLimit: "256m",
       cpuLimit: 0.5,
+      githubToken: null,
     };
   }
 
@@ -70,6 +72,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
         select: {
           memoryLimit: true,
           cpuLimit: true,
+          githubToken: true,
           env: {
             select: { key: true, value: true, environment: true },
           },
@@ -84,6 +87,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
       deploymentType: "PRODUCTION",
       memoryLimit: "256m",
       cpuLimit: 0.5,
+      githubToken: null,
     };
   }
 
@@ -91,6 +95,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
     deploymentType: deployment.type,
     memoryLimit: deployment.project.memoryLimit || "256m",
     cpuLimit: deployment.project.cpuLimit || 0.5,
+    githubToken: deployment.project.githubToken,
     variables: deployment.project.env.map((variable: any) => ({
       key: variable.key,
       value: variable.value,
