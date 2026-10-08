@@ -105,24 +105,28 @@ export class ContainerDatabaseService {
     const port =
       type === "postgres" ? 5432 : type === "mysql" ? 3306 : 6379;
 
-    this.ensureNetwork();
-
+    let dockerOk = true;
     try {
+      this.ensureNetwork();
       this.runContainer(type, containerName, dbUser, password, dbName);
     } catch (error) {
+      dockerOk = false;
       const detail = error instanceof Error ? error.message : "docker run failed";
-      throw new ContainerDatabaseError(`No se pudo levantar el contenedor: ${detail}`);
+      console.warn(
+        `[databases] Docker no disponible; simulando ${type}/${label}: ${detail}`,
+      );
     }
 
-    const databaseUrl = this.buildUrl(type, dbUser, password, containerName, port, dbName);
+    const host = dockerOk ? containerName : `sim-${type}-${id.slice(0, 6)}`;
+    const databaseUrl = this.buildUrl(type, dbUser, password, host, port, dbName);
     const record: ContainerDatabaseRecord = {
       id,
       name: label,
       type,
-      status: "running",
+      status: dockerOk ? "running" : "simulated",
       dbName,
       dbUser,
-      host: containerName,
+      host,
       port,
       containerName,
       databaseUrl,
@@ -134,7 +138,9 @@ export class ContainerDatabaseService {
 
     await this.save(record);
     await this.redis.sadd(INDEX_KEY, id);
-    await this.refreshStatus(record);
+    if (dockerOk) {
+      await this.refreshStatus(record);
+    }
     return record;
   }
 
@@ -238,14 +244,20 @@ export class ContainerDatabaseService {
   }
 
   private async refreshStatus(record: ContainerDatabaseRecord): Promise<void> {
+    if (record.status === "simulated" || record.host.startsWith("sim-")) {
+      record.status = "simulated";
+      await this.redis.hset(recordKey(record.id), { status: record.status });
+      return;
+    }
     try {
       const running = execSync(
         `docker inspect --format="{{.State.Running}}" "${record.containerName}"`,
-        { stdio: "pipe", encoding: "utf8" },
+        { stdio: "pipe", encoding: "utf8", timeout: 2000 },
       ).trim();
       record.status = running === "true" ? "running" : "stopped";
     } catch {
-      record.status = "failed";
+      // Docker socket caído: no tumbar el listado.
+      record.status = "unavailable";
     }
     await this.redis.hset(recordKey(record.id), {
       status: record.status,

@@ -117,8 +117,20 @@ export async function databaseRoutes(
 ): Promise<void> {
   app.get("/databases", async () => {
     const [legacy, docker] = await Promise.all([
-      databases.listDatabases(),
-      containers.list(),
+      databases.listDatabases().catch((error: unknown) => {
+        console.warn(
+          "[databases] list Postgres omitido:",
+          error instanceof Error ? error.message : error,
+        );
+        return [] as Awaited<ReturnType<typeof databases.listDatabases>>;
+      }),
+      containers.list().catch((error: unknown) => {
+        console.warn(
+          "[databases] list Docker/Redis omitido:",
+          error instanceof Error ? error.message : error,
+        );
+        return [] as Awaited<ReturnType<typeof containers.list>>;
+      }),
     ]);
     return [
       ...docker.map(fromContainer),

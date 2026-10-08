@@ -65,12 +65,24 @@ export async function deploymentRoutes(
   app: FastifyInstance,
   deps: DeploymentRouteDeps,
 ): Promise<void> {
-  app.get("/deployments", async () => {
-    const records = await deps.store.list();
-    const refreshed = await Promise.all(
-      records.map((record) => refreshFromDocker(deps.docker, deps.store, record)),
-    );
-    return refreshed.map(toResponse);
+  app.get("/deployments", async (request) => {
+    try {
+      const records = await deps.store.list();
+      const refreshed = await Promise.all(
+        records.map((record) =>
+          refreshFromDocker(deps.docker, deps.store, record),
+        ),
+      );
+      return refreshed.map(toResponse);
+    } catch (error) {
+      request.log.warn(
+        {
+          err: error instanceof Error ? error.message : error,
+        },
+        "Redis/Docker no disponible; listado vacío",
+      );
+      return [];
+    }
   });
 
   app.post<{ Params: { id: string } }>(
@@ -136,7 +148,13 @@ export async function deploymentRoutes(
           return reply.code(400).send({ error: error.message });
         }
         const message = error instanceof Error ? error.message : "Redeploy failed";
-        return reply.code(500).send({ error: message });
+        const soft =
+          /ECONNREFUSED|ENOTFOUND|Prisma|Redis|docker|timed out/i.test(message);
+        return reply.code(soft ? 503 : 500).send({
+          error: soft
+            ? `Infra local no disponible (${message}). El panel puede operar en modo standalone.`
+            : message,
+        });
       }
     },
   );

@@ -79,7 +79,15 @@ export async function deployRoutes(
         }
 
         const message = error instanceof Error ? error.message : "Deploy failed";
-        return reply.code(500).send({ error: message });
+        const soft =
+          /ECONNREFUSED|ENOTFOUND|Redis|Connection is closed|docker|timed out/i.test(
+            message,
+          );
+        return reply.code(soft ? 503 : 500).send({
+          error: soft
+            ? `Motor local no disponible (${message}). Usa mi-paas-dashboard en modo standalone o arranca Redis/Docker.`
+            : message,
+        });
       }
     },
   );

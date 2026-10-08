@@ -17,6 +17,7 @@ const nextConfig = {
     },
   },
   async rewrites() {
+    // Todo /backend pasa por el proxy local (upstream opcional + fallback SQLite/file).
     return [
       {
         source: "/backend/deployments/:projectId/logs",
@@ -24,7 +25,7 @@ const nextConfig = {
       },
       {
         source: "/backend/:path*",
-        destination: `${process.env.API_URL}/:path*`,
+        destination: "/api/backend/:path*",
       },
     ];
   },
