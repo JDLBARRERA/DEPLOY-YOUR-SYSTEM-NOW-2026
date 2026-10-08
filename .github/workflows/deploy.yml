@@ -22,9 +22,9 @@ jobs:
           script_stop: true
           command_timeout: 20m
           script: |
-            # 1. Configurar rutas de NVM, Node y PM2
+            # 1. Configurar rutas de Node, NPM y PM2
             export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
             export PATH="$PATH:/usr/local/bin:/usr/bin:$HOME/.local/bin"
             if [ -d "$HOME/.nvm/versions/node" ]; then
               LATEST_NODE="$(ls "$HOME/.nvm/versions/node" 2>/dev/null | tail -n 1)"
@@ -36,7 +36,7 @@ jobs:
             set -e
             cd ~
 
-            # 2. Actualizar o clonar el código del repositorio
+            # 2. Descargar o actualizar código
             if [ -d DEPLOY-YOUR-SYSTEM-NOW-2026/.git ]; then
               cd DEPLOY-YOUR-SYSTEM-NOW-2026
               git fetch origin main
@@ -51,7 +51,7 @@ jobs:
             cp ~/mi-paas/.env .env || true
             npm install
 
-            # Limitar consumo de RAM para prevenir cierres por OOM
+            # Compilar limitando consumo de RAM
             NODE_OPTIONS="--max-old-space-size=1536" npm run build
 
             # 4. Reiniciar servicio en PM2
