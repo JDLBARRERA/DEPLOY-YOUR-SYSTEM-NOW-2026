@@ -18,11 +18,26 @@ jobs:
         with:
           host: ${{ secrets.DROPLET_IP }}
           username: root
+          # La clave ya funcionaba en deploys anteriores; password como respaldo.
+          key: ${{ secrets.DROPLET_SSH_KEY }}
           password: ${{ secrets.DROPLET_PASSWORD }}
           script_stop: true
+          command_timeout: 20m
           script: |
             # 1. Cargar rutas de Node, npm y PM2 para SSH automático
-            export PATH=$PATH:/usr/local/bin:/usr/bin:~/.nvm/versions/node/$(ls ~/.nvm/versions/node 2>/dev/null | tail -n 1)/bin
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            export PATH="$PATH:/usr/local/bin:/usr/bin:$HOME/.local/bin"
+            if [ -d "$HOME/.nvm/versions/node" ]; then
+              LATEST_NODE="$(ls "$HOME/.nvm/versions/node" 2>/dev/null | tail -n 1)"
+              if [ -n "$LATEST_NODE" ]; then
+                export PATH="$PATH:$HOME/.nvm/versions/node/$LATEST_NODE/bin"
+              fi
+            fi
+
+            echo "==> node: $(command -v node || true) $(node -v 2>/dev/null || true)"
+            echo "==> npm:  $(command -v npm || true) $(npm -v 2>/dev/null || true)"
+            echo "==> pm2:  $(command -v pm2 || true)"
 
             set -e
             cd ~
@@ -45,3 +60,4 @@ jobs:
 
             # 4. Reiniciar servicio en PM2
             pm2 restart paas-dashboard || pm2 start npm --name "paas-dashboard" -- run start -- -p 3000
+            pm2 save || true
