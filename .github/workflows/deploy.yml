@@ -19,19 +19,21 @@ jobs:
           host: ${{ secrets.DROPLET_IP }}
           username: root
           key: ${{ secrets.DROPLET_SSH_KEY }}
-          script_stop: true
           command_timeout: 20m
+          script_stop: false
           script: |
+            bash -euo pipefail <<'EOS'
             echo "=== [PASO 1] Cargar rutas de Node y PM2 ==="
-            export NVM_DIR="$HOME/.nvm"
-            if [ -s "$NVM_DIR/nvm.sh" ]; then
-              . "$NVM_DIR/nvm.sh"
+            export NVM_DIR="${HOME}/.nvm"
+            if [ -s "${NVM_DIR}/nvm.sh" ]; then
+              # shellcheck disable=SC1090
+              . "${NVM_DIR}/nvm.sh"
             fi
-            export PATH="$PATH:/usr/local/bin:/usr/bin:$HOME/.local/bin"
-            if [ -d "$HOME/.nvm/versions/node" ]; then
-              LATEST_NODE="$(ls "$HOME/.nvm/versions/node" 2>/dev/null | tail -n 1 || true)"
-              if [ -n "$LATEST_NODE" ]; then
-                export PATH="$PATH:$HOME/.nvm/versions/node/$LATEST_NODE/bin"
+            export PATH="${PATH}:/usr/local/bin:/usr/bin:${HOME}/.local/bin"
+            if [ -d "${HOME}/.nvm/versions/node" ]; then
+              LATEST_NODE="$(ls "${HOME}/.nvm/versions/node" 2>/dev/null | tail -n 1 || true)"
+              if [ -n "${LATEST_NODE}" ]; then
+                export PATH="${PATH}:${HOME}/.nvm/versions/node/${LATEST_NODE}/bin"
               fi
             fi
             echo "node=$(command -v node || echo missing) $(node -v 2>/dev/null || true)"
@@ -39,38 +41,44 @@ jobs:
             echo "pm2=$(command -v pm2 || echo missing)"
             echo "git=$(command -v git || echo missing)"
 
-            set -e
-
             echo "=== [PASO 2] Actualizar código desde GitHub ==="
-            cd "$HOME"
-            REPO_DIR="$HOME/DEPLOY-YOUR-SYSTEM-NOW-2026"
-            echo "HOME=$HOME REPO_DIR=$REPO_DIR"
-            # No usar safe.directory "*": el asterisco se expande y tumba el script.
-            git config --global --add safe.directory "$REPO_DIR" || true
+            REPO_DIR="${HOME}/DEPLOY-YOUR-SYSTEM-NOW-2026"
+            echo "HOME=${HOME}"
+            echo "REPO_DIR=${REPO_DIR}"
 
-            if [ -d "$REPO_DIR/.git" ]; then
+            if [ -d "${REPO_DIR}/.git" ]; then
               echo "Repo git detectado"
-              cd "$REPO_DIR"
+              cd "${REPO_DIR}"
               git remote set-url origin https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git
               git fetch origin main
               git checkout -B main origin/main
               git reset --hard origin/main
             else
               echo "Clonando repo limpio"
-              rm -rf "$REPO_DIR"
-              git clone --branch main https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git "$REPO_DIR"
-              cd "$REPO_DIR"
+              rm -rf "${REPO_DIR}"
+              git clone --branch main https://github.com/JDLBARRERA/DEPLOY-YOUR-SYSTEM-NOW-2026.git "${REPO_DIR}"
+              cd "${REPO_DIR}"
             fi
             echo "HEAD=$(git rev-parse --short HEAD)"
             pwd
 
             echo "=== [PASO 3] Instalar dependencias y compilar Next.js ==="
-            cd mi-paas-dashboard
-            cp "$HOME/mi-paas/.env" .env || true
+            cd "${REPO_DIR}/mi-paas-dashboard"
+            if [ -f "${HOME}/mi-paas/.env" ]; then
+              cp "${HOME}/mi-paas/.env" .env
+              echo "Copied ${HOME}/mi-paas/.env"
+            else
+              echo "No ${HOME}/mi-paas/.env (continuando)"
+            fi
             npm install
             NODE_OPTIONS="--max-old-space-size=1536" npm run build
 
             echo "=== [PASO 4] Reiniciar servidor con PM2 ==="
-            pm2 restart paas-dashboard || pm2 start npm --name "paas-dashboard" -- run start -- -p 3000
+            if pm2 describe paas-dashboard >/dev/null 2>&1; then
+              pm2 restart paas-dashboard
+            else
+              pm2 start npm --name "paas-dashboard" -- run start -- -p 3000
+            fi
             pm2 save || true
             echo "=== DESPLIEGUE COMPLETADO CON ÉXITO ==="
+            EOS
