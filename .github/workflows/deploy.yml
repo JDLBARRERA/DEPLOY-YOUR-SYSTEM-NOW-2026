@@ -70,6 +70,10 @@ jobs:
             else
               echo "No ${HOME}/mi-paas/.env (continuando)"
             fi
+            if [ -f .env ] && ! grep -q '^API_URL=' .env; then
+              printf '\nAPI_URL=http://127.0.0.1:3001\n' >> .env
+              echo "Added API_URL"
+            fi
             npm install
             NODE_OPTIONS="--max-old-space-size=1536" npm run build
 
