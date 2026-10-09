@@ -22,6 +22,7 @@ export function ProjectAddons({
 }) {
   const [addons, setAddons] = useState<ProjectAddon[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -56,10 +57,11 @@ export function ProjectAddons({
   }
 
   async function remove(addon: ProjectAddon) {
-    const confirmed = window.confirm(
-      `¿Eliminar ${addon.type} (${addon.containerName})? Se borra el contenedor y sus datos.`,
-    );
-    if (!confirmed) return;
+    if (confirmId !== addon.id) {
+      setConfirmId(addon.id);
+      return;
+    }
+    setConfirmId(null);
     setBusy(addon.id);
     try {
       await apiFetch(
@@ -132,7 +134,11 @@ export function ProjectAddons({
                 disabled={busy === addon.id}
                 onClick={() => void remove(addon)}
               >
-                {busy === addon.id ? "Eliminando..." : "Eliminar"}
+                {busy === addon.id
+                  ? "Eliminando..."
+                  : confirmId === addon.id
+                    ? "Sí, borrar"
+                    : "Eliminar"}
               </button>
             </li>
           ))}

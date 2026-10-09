@@ -15,6 +15,7 @@ interface ProjectVariable {
 export function ProjectVariables({ projectId }: { projectId: string }) {
   const [variables, setVariables] = useState<ProjectVariable[] | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
@@ -140,16 +141,25 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
             >
               <span className="truncate font-mono text-xs font-semibold">{variable.key}</span>
               <input
-                type="password"
+                type={visible[variable.id] ? "text" : "password"}
                 value={draftValue(variable)}
                 aria-label={`Valor de ${variable.key}`}
                 spellCheck={false}
-                autoComplete="new-password"
+                autoComplete="off"
                 onChange={(event) =>
                   setDrafts((current) => ({ ...current, [variable.id]: event.target.value }))
                 }
                 className="rounded-md border border-white/70 bg-white/80 px-2 py-1.5 font-mono text-xs text-slate-900"
               />
+              <button
+                type="button"
+                className="text-left text-xs text-slate-700 underline"
+                onClick={() =>
+                  setVisible((current) => ({ ...current, [variable.id]: !current[variable.id] }))
+                }
+              >
+                {visible[variable.id] ? "Ocultar" : "Mostrar"}
+              </button>
               <div className="flex gap-3">
                 <button
                   type="button"

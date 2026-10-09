@@ -17,13 +17,15 @@ export async function tryUpstream(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const hasBody = typeof init?.body === "string" ? init.body.length > 0 : init?.body != null;
   try {
     const response = await fetch(`${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`, {
       ...init,
+      body: hasBody ? init?.body : undefined,
       signal: controller.signal,
       cache: "no-store",
       headers: {
-        "Content-Type": "application/json",
+        ...(hasBody ? { "Content-Type": "application/json" } : {}),
         ...(init?.headers ?? {}),
       },
     });
