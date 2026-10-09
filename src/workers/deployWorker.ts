@@ -23,6 +23,7 @@ import { DEPLOY_QUEUE_NAME, type DeployJobData } from "../queues/deployQueue.js"
 import {
   selectEnv,
   variablesForDeployment,
+  redactEnvValues,
 } from "../services/projectEnv.js";
 import { createRedis } from "../redis.js";
 import { syncDeployment } from "../services/syncDeployment.js";
@@ -91,8 +92,15 @@ const worker = new Worker<DeployJobData>(
       fs.rmSync(repoDir, { recursive: true, force: true });
       fs.mkdirSync(repoDir, { recursive: true });
 
-      const { variables, deploymentType, memoryLimit, cpuLimit, githubToken, customDomain } =
-        await variablesForDeployment(deploymentId);
+      const {
+        variables,
+        deploymentType,
+        memoryLimit,
+        cpuLimit,
+        githubToken,
+        customDomain,
+        plainVariables,
+      } = await variablesForDeployment(deploymentId);
 
       await note(`Clonando repositorio (rama ${branch})...`);
       const cloneUrl = githubCloneUrl(repoUrl, githubToken);
@@ -184,6 +192,9 @@ const worker = new Worker<DeployJobData>(
       await ensureCaddyOnNetwork(deployNetwork);
 
       const runtimeEnv = selectEnv(variables, deploymentType);
+      for (const variable of plainVariables) {
+        runtimeEnv[variable.key] = variable.value;
+      }
       if (!runtimeEnv.DATABASE_URL?.trim()) {
         runtimeEnv.DATABASE_URL = DEFAULT_RUNTIME_DATABASE_URL;
       }
@@ -204,12 +215,17 @@ const worker = new Worker<DeployJobData>(
       await note(
         `Inyectando env: ${Object.keys(runtimeEnv).sort().join(", ")}`,
       );
-      const containerId = execSync(
-        `docker run -d --name "${containerName}" --network "${deployNetwork}" --memory=${limits.memory} --memory-swap=${limits.memory} --cpus=${limits.cpus} ${envFlags} "${appName}"`,
-        { stdio: "pipe" },
-      )
-        .toString()
-        .trim();
+      let containerId: string;
+      try {
+        containerId = execSync(
+          `docker run -d --name "${containerName}" --network "${deployNetwork}" --memory=${limits.memory} --memory-swap=${limits.memory} --cpus=${limits.cpus} ${envFlags} "${appName}"`,
+          { stdio: "pipe" },
+        )
+          .toString()
+          .trim();
+      } catch (runError) {
+        throw new Error(redactEnvValues(redactSecrets(commandError(runError)), runtimeEnv));
+      }
 
       await note(
         `Health check: docker inspect Running cada ${HEALTH_INTERVAL_MS / 1000}s durante hasta ${HEALTH_TIMEOUT_MS / 1000}s...`,

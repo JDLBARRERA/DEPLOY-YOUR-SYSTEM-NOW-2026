@@ -3,14 +3,17 @@ import { adminApiKey, isAuthorizedRequest } from "@/lib/auth";
 import {
   createDatabase,
   createDeployment,
+  createLocalVariable,
   createProjectAddon,
   deleteDatabase,
+  deleteLocalVariable,
   deleteProjectAddon,
   getSettings,
   isSqliteUrl,
   listDatabases,
   listDeployments,
   listProjectAddons,
+  listProjectVariables,
   listProjects,
   redeploy,
   saveSettings,
@@ -171,6 +174,56 @@ async function localFallback(
       if (!ok) {
         return NextResponse.json(
           { error: "Base de datos no encontrada" },
+          { status: 404, headers: { "x-dn-mode": "local" } },
+        );
+      }
+      return NextResponse.json(
+        { ok: true },
+        { status: 200, headers: { "x-dn-mode": "local" } },
+      );
+    }
+  }
+
+  if (head === "projects" && id && action === "variables") {
+    const variableId = segments[3];
+    if (method === "GET" && !variableId) {
+      const rows = listProjectVariables(id);
+      if (!rows) {
+        return NextResponse.json(
+          { error: "Proyecto no encontrado" },
+          { status: 404, headers: { "x-dn-mode": "local" } },
+        );
+      }
+      return NextResponse.json(rows, { headers: { "x-dn-mode": "local" } });
+    }
+    if (method === "POST" && !variableId) {
+      const body = parseJson(bodyText) as { key?: string; value?: string };
+      try {
+        const created = createLocalVariable(id, body.key ?? "", body.value ?? "");
+        if (!created) {
+          return NextResponse.json(
+            { error: "Proyecto no encontrado" },
+            { status: 404, headers: { "x-dn-mode": "local" } },
+          );
+        }
+        return NextResponse.json(created, {
+          status: 201,
+          headers: { "x-dn-mode": "local" },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "No se pudo guardar la variable";
+        const status = message.includes("ya existe") ? 409 : 400;
+        return NextResponse.json(
+          { error: message },
+          { status, headers: { "x-dn-mode": "local" } },
+        );
+      }
+    }
+    if (method === "DELETE" && variableId && !segments[4]) {
+      const ok = deleteLocalVariable(id, variableId);
+      if (!ok) {
+        return NextResponse.json(
+          { error: "Variable no encontrada" },
           { status: 404, headers: { "x-dn-mode": "local" } },
         );
       }

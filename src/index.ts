@@ -13,6 +13,7 @@ import { DatabaseManagerService } from "./services/DatabaseManagerService.js";
 import { ContainerDatabaseService } from "./services/ContainerDatabaseService.js";
 import { createRedis, pingRedis } from "./redis.js";
 import { DeploymentStore } from "./services/DeploymentStore.js";
+import { CaddyClient } from "./services/CaddyClient.js";
 import { LogBus } from "./services/LogBus.js";
 
 const databaseUrl = process.env.DATABASE_URL?.trim() ?? "";
@@ -110,6 +111,15 @@ await app.register((scope) =>
 );
 await databaseRoutes(app, databases, containerDatabases);
 await projectRoutes(app, store);
+
+try {
+  await new CaddyClient().ensureCatchAll();
+} catch (error) {
+  console.warn(
+    "[boot] Caddy catch-all no aplicado:",
+    error instanceof Error ? error.message : error,
+  );
+}
 
 const docker = new Docker();
 try {

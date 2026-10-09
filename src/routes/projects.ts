@@ -5,6 +5,12 @@ import { parseMemoryBytes, normalizeImageName } from "../services/DeployEngine.j
 import { appHost } from "../services/appHost.js";
 import { CaddyClient } from "../services/CaddyClient.js";
 import { normalizeCustomDomain } from "../services/customDomain.js";
+import {
+  listProjectVariables,
+  createProjectVariable,
+  deleteProjectVariable,
+  normalizeEnvPair,
+} from "../services/projectEnv.js";
 import type { DeploymentStore } from "../services/DeploymentStore.js";
 import {
   DatabaseAddonError,
@@ -255,6 +261,70 @@ export async function projectRoutes(
             : "No se pudo eliminar la base de datos";
         return reply.code(400).send({ error: message });
       }
+    },
+  );
+
+  const variableCreateSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["key", "value"],
+    properties: {
+      key: { type: "string", minLength: 1, maxLength: 128 },
+      value: { type: "string", maxLength: 8000 },
+    },
+  } as const;
+
+  app.get<{ Params: { id: string } }>(
+    "/projects/:id/variables",
+    { preValidation: requireAdmin },
+    async (request, reply) => {
+      const rows = await listProjectVariables(request.params.id);
+      if (!rows) {
+        return reply.code(404).send({ error: "Proyecto no encontrado" });
+      }
+      return rows;
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { key: string; value: string } }>(
+    "/projects/:id/variables",
+    { schema: { body: variableCreateSchema }, preValidation: requireAdmin },
+    async (request, reply) => {
+      try {
+        normalizeEnvPair(request.body.key, request.body.value);
+      } catch (error) {
+        return reply.code(400).send({
+          error: error instanceof Error ? error.message : "Variable inválida",
+        });
+      }
+      try {
+        const created = await createProjectVariable(
+          request.params.id,
+          request.body.key,
+          request.body.value,
+        );
+        if (!created) {
+          return reply.code(404).send({ error: "Proyecto no encontrado" });
+        }
+        return reply.code(201).send(created);
+      } catch (error) {
+        if (prismaCode(error) === "P2002") {
+          return reply.code(409).send({ error: "Esa clave ya existe en el proyecto" });
+        }
+        return reply.code(500).send({ error: "No se pudo guardar la variable" });
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string; variableId: string } }>(
+    "/projects/:id/variables/:variableId",
+    { preValidation: requireAdmin },
+    async (request, reply) => {
+      const removed = await deleteProjectVariable(request.params.id, request.params.variableId);
+      if (!removed) {
+        return reply.code(404).send({ error: "Variable no encontrada" });
+      }
+      return { ok: true };
     },
   );
 }

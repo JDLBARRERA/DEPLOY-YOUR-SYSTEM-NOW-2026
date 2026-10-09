@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { WinButton } from "@/components/aero-window";
 import { ProjectAddons } from "@/components/project-addons";
+import { ProjectVariables } from "@/components/project-variables";
 import { apiFetch } from "@/lib/api";
 
 export interface ProjectLimits {
@@ -210,6 +211,7 @@ export function ProjectLimitsCard() {
               </WinButton>
               </div>
             </form>
+            <ProjectVariables projectId={project.id} />
             <ProjectAddons projectId={project.id} projectName={project.name} />
             </div>
           ))}

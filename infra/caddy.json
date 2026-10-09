@@ -9,7 +9,19 @@
       "servers": {
         "paas": {
           "listen": [":80", ":443"],
-          "routes": []
+          "routes": [
+            {
+              "@id": "route-catch-all",
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "status_code": 404,
+                  "body": "Not Found"
+                }
+              ],
+              "terminal": true
+            }
+          ]
         }
       }
     }

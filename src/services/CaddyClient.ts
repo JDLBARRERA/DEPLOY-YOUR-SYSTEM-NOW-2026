@@ -2,12 +2,47 @@ import http from "node:http";
 import { routeHosts } from "./customDomain.js";
 
 const DEFAULT_ADMIN_URL = "http://localhost:2019";
+const ROUTES_PATH = "/config/apps/http/servers/paas/routes";
+const CATCH_ALL_ID = "route-catch-all";
+const PANEL_DIAL = "172.18.0.1:3000";
+
+const catchAllRoute = {
+  "@id": CATCH_ALL_ID,
+  handle: [
+    {
+      handler: "static_response",
+      status_code: 404,
+      body: "Not Found",
+    },
+  ],
+  terminal: true,
+};
 
 export class CaddyClient {
   private readonly adminUrl: string;
 
   constructor(adminUrl = process.env.CADDY_ADMIN_URL ?? DEFAULT_ADMIN_URL) {
     this.adminUrl = normalizeAdminUrl(adminUrl);
+  }
+
+  async ensureCatchAll(): Promise<void> {
+    const routes = await this.readRoutes();
+    for (let index = routes.length - 1; index >= 0; index -= 1) {
+      if (proxiesToPanel(routes[index])) {
+        await this.adminRequest("DELETE", `${ROUTES_PATH}/${index}`, "");
+      }
+    }
+
+    const remaining = await this.readRoutes();
+    const catchAllIndex = remaining.findIndex((route) => route["@id"] === CATCH_ALL_ID);
+    if (catchAllIndex === remaining.length - 1 && catchAllIndex >= 0) {
+      return;
+    }
+    if (catchAllIndex >= 0) {
+      await this.adminRequest("DELETE", `/id/${CATCH_ALL_ID}`, "");
+    }
+    await this.adminRequest("POST", ROUTES_PATH, JSON.stringify(catchAllRoute));
+    console.log("Caddy: los hosts sin proyecto responden 404");
   }
 
   async upsertRoute(
@@ -50,7 +85,8 @@ export class CaddyClient {
       }
     }
 
-    await this.adminRequest("POST", "/config/apps/http/servers/paas/routes/0", body);
+    await this.ensureCatchAll();
+    await this.adminRequest("POST", `${ROUTES_PATH}/0`, body);
     console.log(`Caddy: ruta creada para ${hosts.join(", ")} → ${dial}`);
   }
 
@@ -66,6 +102,12 @@ export class CaddyClient {
         throw error;
       }
     }
+  }
+
+  private async readRoutes(): Promise<CaddyRoute[]> {
+    const raw = await this.adminRequest("GET", ROUTES_PATH, "");
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? (parsed as CaddyRoute[]) : [];
   }
 
   private adminRequest(method: string, requestPath: string, body: string): Promise<string> {
@@ -110,6 +152,22 @@ export class CaddyClient {
       request.end();
     });
   }
+}
+
+type CaddyRoute = {
+  "@id"?: string;
+  handle?: Array<{
+    handler?: string;
+    upstreams?: Array<{ dial?: string }>;
+  }>;
+};
+
+function proxiesToPanel(route: CaddyRoute): boolean {
+  return (route.handle ?? []).some(
+    (handler) =>
+      handler.handler === "reverse_proxy" &&
+      (handler.upstreams ?? []).some((upstream) => upstream.dial === PANEL_DIAL),
+  );
 }
 
 function isNotFound(error: unknown): boolean {

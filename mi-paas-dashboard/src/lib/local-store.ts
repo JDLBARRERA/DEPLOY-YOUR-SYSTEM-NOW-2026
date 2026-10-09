@@ -69,11 +69,19 @@ export interface LocalAddon {
   connectionString: string;
 }
 
+export interface LocalVariable {
+  id: string;
+  projectId: string;
+  key: string;
+  value: string;
+}
+
 interface StoreShape {
   deployments: LocalDeployment[];
   databases: LocalDatabase[];
   projects?: LocalProject[];
   addons?: LocalAddon[];
+  variables?: LocalVariable[];
   logs: Record<string, string[]>;
   settings?: PanelSettings;
 }
@@ -122,6 +130,7 @@ function ensureStore(): StoreShape {
       databases: Array.isArray(parsed.databases) ? parsed.databases : [],
       projects: Array.isArray(parsed.projects) ? parsed.projects : [],
       addons: Array.isArray(parsed.addons) ? parsed.addons : [],
+      variables: Array.isArray(parsed.variables) ? parsed.variables : [],
       logs: parsed.logs && typeof parsed.logs === "object" ? parsed.logs : {},
       settings: parsed.settings,
     };
@@ -459,6 +468,63 @@ export function deleteProjectAddon(projectId: string, addonId: string): boolean 
     return false;
   }
   store.addons = next;
+  saveStore(store);
+  return true;
+}
+
+export function listProjectVariables(projectId: string): LocalVariable[] | null {
+  const store = ensureStore();
+  if (!listProjects().some((project) => project.id === projectId)) {
+    return null;
+  }
+  return (store.variables ?? [])
+    .filter((variable) => variable.projectId === projectId)
+    .sort((left, right) => left.key.localeCompare(right.key));
+}
+
+export function createLocalVariable(
+  projectId: string,
+  key: string,
+  value: string,
+): LocalVariable | null {
+  const normalizedKey = key.trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(normalizedKey)) {
+    throw new Error("La clave debe ser un nombre de variable, por ejemplo API_URL");
+  }
+  if (value.includes("\n") || value.includes("\r")) {
+    throw new Error("El valor no puede tener saltos de línea");
+  }
+  const store = ensureStore();
+  if (!listProjects().some((project) => project.id === projectId)) {
+    return null;
+  }
+  const existing = (store.variables ?? []).find(
+    (variable) => variable.projectId === projectId && variable.key === normalizedKey,
+  );
+  if (existing) {
+    throw new Error("Esa clave ya existe en el proyecto");
+  }
+  const created: LocalVariable = {
+    id: randomBytes(8).toString("hex"),
+    projectId,
+    key: normalizedKey,
+    value,
+  };
+  store.variables = [...(store.variables ?? []), created];
+  saveStore(store);
+  return created;
+}
+
+export function deleteLocalVariable(projectId: string, variableId: string): boolean {
+  const store = ensureStore();
+  const before = store.variables ?? [];
+  const next = before.filter(
+    (variable) => !(variable.projectId === projectId && variable.id === variableId),
+  );
+  if (next.length === before.length) {
+    return false;
+  }
+  store.variables = next;
   saveStore(store);
   return true;
 }
