@@ -36,6 +36,7 @@ const caddy = new CaddyClient();
 const concurrency = Number(process.env.DEPLOY_CONCURRENCY ?? 5);
 const HEALTH_TIMEOUT_MS = 15_000;
 const HEALTH_INTERVAL_MS = 2_000;
+const LOCK_DURATION_MS = 300_000;
 const CONTAINER_INTERNAL_PORT = 8000;
 const DEFAULT_RUNTIME_DATABASE_URL =
   process.env.DEPLOY_DEFAULT_DATABASE_URL?.trim() ||
@@ -104,17 +105,15 @@ const worker = new Worker<DeployJobData>(
 
       await note(`Clonando repositorio (rama ${branch})...`);
       const cloneUrl = githubCloneUrl(repoUrl, githubToken);
-      execSync(`git clone -b "${branch}" --single-branch "${cloneUrl}" .`, {
+      await execAsync(`git clone -b "${branch}" --single-branch "${cloneUrl}" .`, {
         cwd: repoDir,
-        stdio: "pipe",
       });
       cloned = true;
 
       if (commitHash) {
         await note(`Checkout commit ${commitHash}...`);
-        execSync(`git checkout "${commitHash}"`, {
+        await execAsync(`git checkout "${commitHash}"`, {
           cwd: repoDir,
-          stdio: "pipe",
         });
       }
 
@@ -143,10 +142,9 @@ const worker = new Worker<DeployJobData>(
           : "Construyendo imagen...",
       );
       try {
-        execSync(buildCmd, {
+        await execAsync(buildCmd, {
           cwd: repoDir,
-          stdio: "pipe",
-          encoding: "utf8",
+          maxBuffer: 32 * 1024 * 1024,
         });
       } catch (buildError) {
         const detail = commandError(buildError);
@@ -308,8 +306,12 @@ const worker = new Worker<DeployJobData>(
       }
     }
   },
-  { connection, concurrency },
+  { connection, concurrency, lockDuration: LOCK_DURATION_MS },
 );
+
+worker.on("completed", (job) => {
+  console.log(`Deploy job ${job.id} completed`);
+});
 
 worker.on("failed", (job, error) => {
   console.error(
@@ -317,7 +319,13 @@ worker.on("failed", (job, error) => {
   );
 });
 
-console.log(`Deploy worker listening with concurrency ${concurrency}`);
+worker.on("error", (error) => {
+  console.error(`Deploy worker error: ${redactSecrets(error.message)}`);
+});
+
+console.log(
+  `Deploy worker listening with concurrency ${concurrency} and lockDuration ${LOCK_DURATION_MS}ms`,
+);
 
 function repoDirectory(jobId: string | undefined): string {
   if (!jobId || !/^[a-z0-9_-]+$/i.test(jobId)) {
