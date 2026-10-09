@@ -51,16 +51,20 @@ async function handle(request: Request, context: Ctx): Promise<Response> {
   }
 
   if (!forceLocal) {
-    const upstream = await tryUpstream(joined + new URL(request.url).search, {
-      method,
-      body: bodyText,
-      headers: {
-        Accept: request.headers.get("Accept") ?? "application/json",
-        ...(isDeployRoute || isDatabasesRoute || isProjectsRoute
-          ? { "x-api-key": adminApiKey() }
-          : {}),
+    const upstream = await tryUpstream(
+      joined + new URL(request.url).search,
+      {
+        method,
+        body: bodyText,
+        headers: {
+          Accept: request.headers.get("Accept") ?? "application/json",
+          ...(isDeployRoute || isDatabasesRoute || isProjectsRoute
+            ? { "x-api-key": adminApiKey() }
+            : {}),
+        },
       },
-    });
+      method === "GET" || method === "HEAD" ? 2500 : 60_000,
+    );
 
     if (upstream && upstream.status < 500) {
       // DELETE de databases puede no existir en el motor; caer a local.
