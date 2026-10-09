@@ -1,164 +1,87 @@
-# 🚀 Guía de Despliegue e Infraestructura: Motor PaaS Custom (`mi-paas`)
+# Droplet
 
-Este documento contiene el resumen técnico de la infraestructura, los requisitos de servidor, el stack de software instalado y los pasos exactos realizados para desplegar con éxito el motor PaaS en un VPS de DigitalOcean.
+Lo que está corriendo en `46.101.84.190`. La forma del código está en [README.md](README.md).
 
-La arquitectura del repositorio está en [README.md](README.md). El Droplet que responde hoy es `46.101.84.190`. El panel `mi-paas-dashboard` (puerto 3000 en esta máquina) llama a `/backend` y Next reescribe esa ruta hacia `http://46.101.84.190`.
+El dominio del panel es `https://deplowe-now.com`. El certificado de Let's Encrypt cubre el apex y `www`, y vive en `/etc/letsencrypt/live/deplowe-now.com-0001/`. No cubre `*.deplowe-now.com`.
 
----
+## Quién escucha qué
 
-## 📋 1. Requisitos Previos (Lo que se necesita)
+Nginx es la puerta pública. Caddy no publica 80 ni 443.
 
-* **Servidor VPS**: DigitalOcean Droplet (mínimo recomendado: 1 vCPU, 2 GB RAM, Ubuntu).
-* **Dirección IP Pública / Dominio**: IP estática o dominio configurado (se utilizó `nip.io` para resolución automática de IP en DNS).
-* **Accesos**: Usuario `root` o privilegios `sudo` vía SSH / Consola.
-* **Puertos Abiertos en Red**:
-  * `80` (HTTP - Caddy Reverse Proxy)
-  * `443` (HTTPS - Caddy TLS/SSL)
-  * `2019` (API Interna de Caddy Admin)
-  * `3000` (Puerto interno del backend Fastify)
-  * `5432` / `6543` (PostgreSQL / PgBouncer)
-  * `6379` (Redis)
+| Entrada | A dónde va |
+| --- | --- |
+| `deplowe-now.com` y `www` en el 443 | Panel Next.js, `127.0.0.1:3000` |
+| `/webhooks/` en ese mismo servidor | API Fastify, `127.0.0.1:3001` |
+| `*.deplowe-now.com` en el 443 | Caddy, `127.0.0.1:8080` |
+| `deplowe-now.com`, `www` y `*.deplowe-now.com` en el 80 | Redirección a HTTPS |
+| Cualquier otro host en el 80 | Caddy, `127.0.0.1:8080` |
 
----
+El archivo es `/etc/nginx/sites-available/paas-dashboard`. No está en el repositorio.
 
-## 🛠️ 2. Stack Tecnológico e Instalado
+Caddy sale de `/root/mi-paas/docker-compose.yml`. Publica solo `127.0.0.1:8080:80` y `127.0.0.1:2019:2019`. La API de administración es la que usa el motor para crear rutas. Postgres, PgBouncer y Redis quedan en `127.0.0.1:5432`, `6543` y `6379`.
 
-### **A. Entorno de Ejecución (Host / VPS)**
+## Procesos
 
-* **Node.js**: `v20.20.2` (Actualizado desde v18 para corregir *Segmentation Faults* y habilitar lectura nativa de `--env-file`).
-* **NPM**: Manejador de paquetes de Node.
-* **Docker & Docker Compose**: Para orquestación de contenedores de infraestructura.
+Hay dos copias del mismo repositorio.
 
-### **B. Servicios en Contenedores Docker (`docker-compose`)**
-
-1. **PostgreSQL 16** (`postgres:16-alpine`): Base de datos relacional principal.
-2. **PgBouncer** (`edoburu/pgbouncer:v1.24.1-p1`): Connection pooler para optimizar conexiones a Postgres.
-3. **Redis 7** (`redis:7-alpine`): Servidor en memoria para colas de tareas (`BullMQ`) y caché.
-4. **Caddy 2** (`caddy:2`): Reverse proxy y servidor web dinámico para gestionar dominios y SSL.
-
-### **C. Aplicación Backend (`mi-paas`)**
-
-* **Framework Web**: Fastify.
-* **ORM**: Prisma (v6.19.3).
-* **Gestión de Procesos**: `nohup` (ejecución persistente en segundo plano).
-
----
-
-## ⚙️ 3. Resumen de Pasos Realizados
-
-### **Paso 1: Solución de Dependencias y Node.js**
-
-* Se actualizó Node.js a la versión **20.20.2**.
-* Se ejecutó la instalación limpia de librerías y la generación de binarios de Prisma:
-
-```bash
-npm install
-npx prisma generate
-```
-
-### **Paso 2: Variables de Entorno (`.env`)**
-
-Se configuró el archivo `.env` en la raíz del proyecto apuntando a la base de datos PostgreSQL/PgBouncer:
-
-```env
-DATABASE_URL="postgresql://paas:paas@127.0.0.1:5432/paas?schema=public"
-```
-
-### **Paso 3: Sincronización del Esquema de Base de Datos**
-
-Se ejecutó la creación y alineación automática de las tablas del esquema de Prisma hacia PostgreSQL:
-
-```bash
-npx prisma db push
-```
-
-### **Paso 4: Configuración de Caddy (`infra/caddy.json`)**
-
-Se estableció la estructura JSON para que Caddy escuche en el puerto 80 y redirija el tráfico hacia el puerto 3000 del backend Fastify en la interfaz de red interna:
-
-```json
-{
-  "admin": {
-    "listen": "0.0.0.0:2019",
-    "enforce_origin": false
-  },
-  "apps": {
-    "http": {
-      "servers": {
-        "paas": {
-          "listen": [":80"],
-          "routes": [
-            {
-              "handle": [
-                {
-                  "handler": "reverse_proxy",
-                  "upstreams": [
-                    { "dial": "172.18.0.1:3000" }
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-      }
-    }
-  }
-}
-```
-
-### **Paso 5: Inicio de la Aplicación en Segundo Plano**
-
-Se inició la aplicación Node usando la carga de entorno nativa y guardando registros de ejecución:
-
-```bash
-nohup node --env-file=.env dist/index.js > app.log 2>&1 &
-```
-
----
-
-## 💾 4. Persistencia de Datos
-
-Las bases de datos gestionadas no se pierden al reiniciar o detener contenedores gracias al volumen persistente mapeado en el sistema operativo:
-
-* **Nombre del Volumen Docker**: `mi-paas_postgres_data`
-* **Ruta Física en el VPS**: `/var/lib/docker/volumes/mi-paas_postgres_data/_data`
-
----
-
-## 🔍 5. Endpoints de Verificación
-
-Una vez iniciados todos los servicios, los siguientes endpoints devuelven respuestas activas en el navegador/API:
-
-| Endpoint | Descripción | Estado Esperado |
+| Qué | Dónde | Proceso |
 | --- | --- | --- |
-| `http://<IP_O_DOMINIO>/` | Ruta raíz del backend Fastify | `404 Not Found` (Correcto, indica proxy funcional) |
-| `http://<IP_O_DOMINIO>/deployments` | Listado de despliegues en base de datos | `[]` (Arreglo JSON vacío) |
-| `http://<IP_O_DOMINIO>/databases` | Listado de instancias de BD creadas | `[]` (Arreglo JSON vacío) |
+| API y worker | `/root/mi-paas` | PM2 `paas-api`, `node dist/index.js`, puerto 3001 |
+| Panel | `/root/DEPLOY-YOUR-SYSTEM-NOW-2026/mi-paas-dashboard` | PM2 `paas-dashboard`, puerto 3000 |
 
----
+El `.env` de producción está en `/root/mi-paas/.env`. El build del panel copia ese archivo a su carpeta. No se commitea.
 
-## 🛠️ Comandos de Mantenimiento Útiles
+Prisma es 6.19.3. Hay que invocarlo con la versión fija. El cliente generado no está en git: `npm run build` lo copia de `src/generated` a `dist/generated`.
 
-Ver estado de los contenedores:
+## Actualizar el Droplet
+
+En las dos copias:
 
 ```bash
+git pull --ff-only origin main
+```
+
+En `/root/mi-paas`:
+
+```bash
+npx prisma@6.19.3 migrate deploy
+npx prisma@6.19.3 generate
+npm run build
+```
+
+En el panel:
+
+```bash
+cd /root/DEPLOY-YOUR-SYSTEM-NOW-2026/mi-paas-dashboard
+cp /root/mi-paas/.env .env
+NODE_OPTIONS=--max-old-space-size=1536 npm run build
+```
+
+Y al final:
+
+```bash
+pm2 restart all
+```
+
+Un push a `main` dispara `.github/workflows/deploy.yml`, que solo reconstruye el panel. No migra la base ni recompila la API.
+
+## Apps, dominios y bases
+
+Cada despliegue de producción queda en `{proyecto}.deplowe-now.com`. Si el proyecto tiene `customDomain`, Caddy añade ese host a la misma ruta. El contenedor de la app no publica puertos en el host: Caddy lo alcanza por la red de Docker.
+
+Un dominio que no es de `deplowe-now.com` entra por el puerto 80. Para el candado, Cloudflare con la nube naranja y SSL Flexible. En Full o Full (strict) Cloudflare habla por el 443 y el certificado del Droplet no incluye ese nombre.
+
+Un add-on Postgres es `postgres:15-alpine` con volumen en `/var/lib/postgresql/data`. Redis es `redis:7-alpine` con volumen en `/data`. El nombre del contenedor es el host de la cadena de conexión. Borrar el add-on borra el contenedor y el volumen.
+
+El Postgres de la plataforma sigue en el volumen `mi-paas_postgres_data`.
+
+## Comprobar
+
+```bash
+nginx -t
 docker ps
+pm2 pid paas-api
+pm2 pid paas-dashboard
 ```
 
-Ver registros de Caddy:
-
-```bash
-docker logs mi-paas-caddy-1 --tail 50
-```
-
-Ver registros de la App Node:
-
-```bash
-cat app.log
-```
-
-Reiniciar el servidor web (Caddy):
-
-```bash
-docker compose restart caddy
-```
+`POST https://deplowe-now.com/webhooks/github` con un cuerpo vacío debe responder 401 de la API (`Invalid GitHub signature`), no una redirección al login.
