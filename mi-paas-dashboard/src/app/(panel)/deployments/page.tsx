@@ -108,18 +108,14 @@ export default function DeploymentsPage() {
           <p className="text-sm">Todavía no hay despliegues.</p>
         ) : (
           <div className="overflow-x-auto rounded-md border border-white/50 bg-white/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
-            <table className="w-full min-w-[720px] text-left text-sm">
+            <table className="w-full table-fixed text-left text-sm">
               <thead className="bg-gradient-to-b from-white/70 to-sky-100/50">
                 <tr>
-                  <th className="px-2.5 py-1.5 font-semibold">Proyecto</th>
-                  <th className="px-2.5 py-1.5 font-semibold">Repositorio</th>
-                  <th className="w-24 px-2.5 py-1.5 font-semibold">Estado</th>
-                  <th className="min-w-[180px] whitespace-nowrap px-2.5 py-1.5 font-semibold">
-                    Creado
-                  </th>
-                  <th className="min-w-[200px] whitespace-nowrap px-2.5 py-1.5 font-semibold">
-                    Acciones
-                  </th>
+                  <th className="w-[18%] px-2.5 py-1.5 font-semibold">Proyecto</th>
+                  <th className="w-[34%] px-2.5 py-1.5 font-semibold">Repositorio</th>
+                  <th className="w-[12%] px-2.5 py-1.5 font-semibold">Estado</th>
+                  <th className="w-[18%] px-2.5 py-1.5 font-semibold">Creado</th>
+                  <th className="w-[18%] px-2.5 py-1.5 font-semibold">Acciones</th>
                 </tr>
               </thead>
               <tbody>
@@ -127,10 +123,10 @@ export default function DeploymentsPage() {
                   const busy = redeployingId === item.projectId;
                   return (
                     <tr key={item.projectId} className="border-t border-white/50">
-                      <td className="max-w-[140px] truncate px-2.5 py-1.5 font-medium">
+                      <td className="break-words px-2.5 py-1.5 font-medium">
                         {item.projectName}
                       </td>
-                      <td className="max-w-[220px] truncate px-2.5 py-1.5" title={item.repoUrl}>
+                      <td className="break-all px-2.5 py-1.5 font-mono text-xs leading-snug">
                         {item.repoUrl}
                       </td>
                       <td className="px-2.5 py-1.5">
@@ -142,11 +138,11 @@ export default function DeploymentsPage() {
                           <StatusBadge status={item.status} />
                         </button>
                       </td>
-                      <td className="min-w-[180px] whitespace-nowrap px-2.5 py-1.5 tabular-nums">
+                      <td className="whitespace-normal px-2.5 py-1.5 tabular-nums leading-snug">
                         {formatDate(item.createdAt)}
                       </td>
                       <td className="px-2.5 py-1.5">
-                        <div className="flex flex-nowrap items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <WinButton compact onClick={() => setLogsFor(item)}>
                             Ver Logs
                           </WinButton>
