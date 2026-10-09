@@ -109,6 +109,22 @@ export async function createProjectVariable(projectId: string, key: string, valu
   });
 }
 
+export async function updateProjectVariable(projectId: string, variableId: string, value: string) {
+  const existing = await prisma.environmentVariable.findFirst({
+    where: { id: variableId, projectId },
+    select: { id: true, key: true },
+  });
+  if (!existing) {
+    return null;
+  }
+  const pair = normalizeEnvPair(existing.key, value);
+  return prisma.environmentVariable.update({
+    where: { id: existing.id },
+    data: { value: pair.value },
+    select: variableSelect,
+  });
+}
+
 export async function deleteProjectVariable(projectId: string, variableId: string) {
   const existing = await prisma.environmentVariable.findFirst({
     where: { id: variableId, projectId },

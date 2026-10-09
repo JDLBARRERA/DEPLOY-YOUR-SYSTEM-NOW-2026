@@ -515,6 +515,29 @@ export function createLocalVariable(
   return created;
 }
 
+export function updateLocalVariable(
+  projectId: string,
+  variableId: string,
+  value: string,
+): LocalVariable | null {
+  if (value.includes("\n") || value.includes("\r")) {
+    throw new Error("El valor no puede tener saltos de línea");
+  }
+  const store = ensureStore();
+  const current = (store.variables ?? []).find(
+    (variable) => variable.projectId === projectId && variable.id === variableId,
+  );
+  if (!current) {
+    return null;
+  }
+  const updated = { ...current, value };
+  store.variables = (store.variables ?? []).map((variable) =>
+    variable.id === current.id ? updated : variable,
+  );
+  saveStore(store);
+  return updated;
+}
+
 export function deleteLocalVariable(projectId: string, variableId: string): boolean {
   const store = ensureStore();
   const before = store.variables ?? [];

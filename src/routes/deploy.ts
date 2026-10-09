@@ -1,6 +1,7 @@
 import type { Queue } from "bullmq";
 import type { FastifyInstance } from "fastify";
 import { requireAdmin } from "../auth/requireAdmin.js";
+import { prisma } from "../db.js";
 import type { DeployJobData } from "../queues/deployQueue.js";
 import { enqueueDeployment } from "../services/enqueueDeployment.js";
 import {
@@ -42,6 +43,36 @@ export interface DeployRouteDeps {
   logs: LogBus;
 }
 
+async function deploymentForNamedProject(
+  projectName: string,
+  image: string,
+  branch: string,
+): Promise<string | undefined> {
+  const projects = await prisma.project.findMany({ select: { id: true, name: true } });
+  const exact = projects.find((project) => project.name.trim() === projectName.trim());
+  const normalized = projects.find((project) => {
+    try {
+      return normalizeImageName(project.name) === image;
+    } catch {
+      return false;
+    }
+  });
+  const project = exact ?? normalized;
+  if (!project) {
+    return undefined;
+  }
+  const deployment = await prisma.deployment.create({
+    data: {
+      projectId: project.id,
+      status: "queued",
+      type: "PRODUCTION",
+      branch,
+    },
+    select: { id: true },
+  });
+  return deployment.id;
+}
+
 export async function deployRoutes(
   app: FastifyInstance,
   deps: DeployRouteDeps,
@@ -59,11 +90,14 @@ export async function deployRoutes(
           assertGitCommit(commitHash);
         }
         const image = normalizeImageName(request.body.projectName);
+        const deploymentId =
+          request.body.deploymentId ??
+          (await deploymentForNamedProject(request.body.projectName, image, branch));
         const queued = await enqueueDeployment(deps, {
           repoUrl: request.body.repoUrl,
           projectName: request.body.projectName,
           image,
-          deploymentId: request.body.deploymentId,
+          deploymentId,
           branch,
           commitHash: commitHash || undefined,
           clearCache: request.body.clearCache === true,

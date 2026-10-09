@@ -17,6 +17,7 @@ import {
   listProjects,
   redeploy,
   saveSettings,
+  updateLocalVariable,
   updateProjectLimits,
   type EnvPair,
   type PanelSettings,
@@ -216,6 +217,25 @@ async function localFallback(
         return NextResponse.json(
           { error: message },
           { status, headers: { "x-dn-mode": "local" } },
+        );
+      }
+    }
+    if (method === "PATCH" && variableId && !segments[4]) {
+      const body = parseJson(bodyText) as { value?: string };
+      try {
+        const updated = updateLocalVariable(id, variableId, body.value ?? "");
+        if (!updated) {
+          return NextResponse.json(
+            { error: "Variable no encontrada" },
+            { status: 404, headers: { "x-dn-mode": "local" } },
+          );
+        }
+        return NextResponse.json(updated, { headers: { "x-dn-mode": "local" } });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "No se pudo guardar la variable";
+        return NextResponse.json(
+          { error: message },
+          { status: 400, headers: { "x-dn-mode": "local" } },
         );
       }
     }

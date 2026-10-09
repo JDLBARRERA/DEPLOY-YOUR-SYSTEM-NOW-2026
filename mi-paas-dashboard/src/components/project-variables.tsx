@@ -14,6 +14,7 @@ interface ProjectVariable {
 
 export function ProjectVariables({ projectId }: { projectId: string }) {
   const [variables, setVariables] = useState<ProjectVariable[] | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
@@ -56,8 +57,36 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
     }
   }
 
+  function draftValue(variable: ProjectVariable): string {
+    return drafts[variable.id] ?? variable.value;
+  }
+
+  async function save(variable: ProjectVariable) {
+    const value = draftValue(variable);
+    setBusy(`save:${variable.id}`);
+    try {
+      const updated = await apiFetch<ProjectVariable>(
+        `/projects/${encodeURIComponent(projectId)}/variables/${encodeURIComponent(variable.id)}`,
+        { method: "PATCH", body: JSON.stringify({ value }) },
+      );
+      setVariables((current) =>
+        current?.map((item) => (item.id === updated.id ? updated : item)) ?? [],
+      );
+      setDrafts((current) => {
+        const next = { ...current };
+        delete next[variable.id];
+        return next;
+      });
+      toast.success(`${variable.key} actualizada`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar la variable");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function remove(variable: ProjectVariable) {
-    setBusy(variable.id);
+    setBusy(`delete:${variable.id}`);
     try {
       await apiFetch(
         `/projects/${encodeURIComponent(projectId)}/variables/${encodeURIComponent(variable.id)}`,
@@ -74,7 +103,8 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
 
   return (
     <div className="mt-3 border-t border-white/60 pt-3">
-      <h3 className="mb-2 text-xs font-semibold text-sky-950">Variables de entorno</h3>
+      <h3 className="mb-1 text-xs font-semibold text-sky-950">Variables de entorno</h3>
+      <p className="mb-2 text-xs text-slate-600">Se aplican en el próximo despliegue.</p>
       <form className="mb-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]" onSubmit={(event) => void onSubmit(event)}>
         <input
           name="key"
@@ -111,19 +141,33 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
               <span className="truncate font-mono text-xs font-semibold">{variable.key}</span>
               <input
                 type="password"
-                readOnly
-                value={variable.value}
+                value={draftValue(variable)}
                 aria-label={`Valor de ${variable.key}`}
+                spellCheck={false}
+                autoComplete="new-password"
+                onChange={(event) =>
+                  setDrafts((current) => ({ ...current, [variable.id]: event.target.value }))
+                }
                 className="rounded-md border border-white/70 bg-white/80 px-2 py-1.5 font-mono text-xs text-slate-900"
               />
-              <button
-                type="button"
-                className="text-left text-xs text-rose-800 underline"
-                disabled={busy === variable.id}
-                onClick={() => void remove(variable)}
-              >
-                {busy === variable.id ? "Eliminando..." : "Eliminar"}
-              </button>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  className="text-left text-xs text-sky-800 underline"
+                  disabled={busy !== null || draftValue(variable) === variable.value}
+                  onClick={() => void save(variable)}
+                >
+                  {busy === `save:${variable.id}` ? "Guardando..." : "Guardar"}
+                </button>
+                <button
+                  type="button"
+                  className="text-left text-xs text-rose-800 underline"
+                  disabled={busy !== null}
+                  onClick={() => void remove(variable)}
+                >
+                  {busy === `delete:${variable.id}` ? "Eliminando..." : "Eliminar"}
+                </button>
+              </div>
             </li>
           ))}
         </ul>

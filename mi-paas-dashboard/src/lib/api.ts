@@ -58,7 +58,7 @@ export async function apiFetch<T>(
     ...options,
     credentials: "include",
     headers: {
-      "Content-Type": "application/json",
+      ...(options?.body != null ? { "Content-Type": "application/json" } : {}),
       ...options?.headers,
     },
   });

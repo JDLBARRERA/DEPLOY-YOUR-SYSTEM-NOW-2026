@@ -8,6 +8,7 @@ import { normalizeCustomDomain } from "../services/customDomain.js";
 import {
   listProjectVariables,
   createProjectVariable,
+  updateProjectVariable,
   deleteProjectVariable,
   normalizeEnvPair,
 } from "../services/projectEnv.js";
@@ -312,6 +313,37 @@ export async function projectRoutes(
           return reply.code(409).send({ error: "Esa clave ya existe en el proyecto" });
         }
         return reply.code(500).send({ error: "No se pudo guardar la variable" });
+      }
+    },
+  );
+
+  const variableUpdateSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["value"],
+    properties: {
+      value: { type: "string", maxLength: 8000 },
+    },
+  } as const;
+
+  app.patch<{ Params: { id: string; variableId: string }; Body: { value: string } }>(
+    "/projects/:id/variables/:variableId",
+    { schema: { body: variableUpdateSchema }, preValidation: requireAdmin },
+    async (request, reply) => {
+      try {
+        const updated = await updateProjectVariable(
+          request.params.id,
+          request.params.variableId,
+          request.body.value,
+        );
+        if (!updated) {
+          return reply.code(404).send({ error: "Variable no encontrada" });
+        }
+        return updated;
+      } catch (error) {
+        return reply.code(400).send({
+          error: error instanceof Error ? error.message : "Variable inválida",
+        });
       }
     },
   );
