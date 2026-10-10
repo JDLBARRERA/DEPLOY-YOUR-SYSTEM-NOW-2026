@@ -13,6 +13,8 @@ import { DatabaseManagerService } from "./services/DatabaseManagerService.js";
 import { ContainerDatabaseService } from "./services/ContainerDatabaseService.js";
 import { createRedis, pingRedis } from "./redis.js";
 import { DeploymentStore } from "./services/DeploymentStore.js";
+import { reportUsage } from "./jobs/reportUsage.js";
+import { pruneDockerDisk } from "./jobs/pruneDockerDisk.js";
 import { CaddyClient } from "./services/CaddyClient.js";
 import { LogBus } from "./services/LogBus.js";
 
@@ -113,10 +115,12 @@ await databaseRoutes(app, databases, containerDatabases);
 await projectRoutes(app, store);
 
 try {
-  await new CaddyClient().ensureCatchAll();
+  const caddy = new CaddyClient();
+  await caddy.ensureCatchAll();
+  await caddy.ensureAccessLog();
 } catch (error) {
   console.warn(
-    "[boot] Caddy catch-all no aplicado:",
+    "[boot] Caddy catch-all o access log no aplicado:",
     error instanceof Error ? error.message : error,
   );
 }
@@ -145,6 +149,24 @@ await deploymentRoutes(app, {
 
 try {
   await app.listen({ port, host: "0.0.0.0" });
+setInterval(() => {
+  void reportUsage().catch((error: unknown) => {
+    console.error(
+      "[usage] reporte falló:",
+      error instanceof Error ? error.message : error,
+    );
+  });
+}, 24 * 60 * 60 * 1000);
+setInterval(() => {
+  try {
+    pruneDockerDisk();
+  } catch (error: unknown) {
+    console.error(
+      "[prune] limpieza falló:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+}, 24 * 60 * 60 * 1000);
 } catch (error) {
   app.log.error(error);
   process.exit(1);

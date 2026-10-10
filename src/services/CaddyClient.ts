@@ -45,6 +45,29 @@ export class CaddyClient {
     console.log("Caddy: los hosts sin proyecto responden 404");
   }
 
+  async ensureAccessLog(): Promise<void> {
+    await this.adminRequest(
+      "PATCH",
+      "/config/apps/http/servers/paas/logs",
+      JSON.stringify({ default_logger_name: "paas" }),
+    );
+    const logger = {
+      include: ["http.log.access.paas"],
+      encoder: { format: "json" },
+      writer: { output: "file", filename: "/data/access.log" },
+    };
+    const body = JSON.stringify(logger);
+    try {
+      await this.adminRequest("POST", "/config/logging/logs/paas-access", body);
+    } catch (error) {
+      if (!(error instanceof Error) || !/\b(409|400)\b/.test(error.message)) {
+        throw error;
+      }
+      await this.adminRequest("PATCH", "/config/logging/logs/paas-access", body);
+    }
+    console.log("Caddy: access log JSON en /data/access.log");
+  }
+
   async upsertRoute(
     projectId: string,
     host: string,

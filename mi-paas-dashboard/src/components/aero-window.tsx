@@ -1,7 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useRouter } from "next/navigation";
+
+const TASKBAR_PX = 56;
+const TITLE_PX = 36;
+const VISIBLE_PX = 48;
+
+type DragPlace = { x: number; y: number; width: number };
+
+function clampPlace(x: number, y: number, width: number): { x: number; y: number } {
+  const maxX = window.innerWidth - VISIBLE_PX;
+  const minX = VISIBLE_PX - width;
+  const maxY = Math.max(0, window.innerHeight - TASKBAR_PX - TITLE_PX);
+  return {
+    x: Math.min(maxX, Math.max(minX, x)),
+    y: Math.min(maxY, Math.max(0, y)),
+  };
+}
 
 export function AeroWindow({
   title,
@@ -17,8 +33,46 @@ export function AeroWindow({
   wide?: boolean;
 }) {
   const router = useRouter();
+  const frameRef = useRef<HTMLElement>(null);
+  const drag = useRef<{ dx: number; dy: number; width: number } | null>(null);
   const [minimized, setMinimized] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  const [place, setPlace] = useState<DragPlace | null>(null);
+
+  useEffect(() => {
+    function onMove(event: MouseEvent) {
+      const current = drag.current;
+      if (!current) return;
+      const next = clampPlace(event.clientX - current.dx, event.clientY - current.dy, current.width);
+      setPlace({ x: next.x, y: next.y, width: current.width });
+    }
+    function onUp() {
+      drag.current = null;
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
+  function onTitleDown(event: ReactMouseEvent<HTMLElement>) {
+    if (maximized || event.button !== 0) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest("button")) return;
+    const node = frameRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    drag.current = {
+      dx: event.clientX - rect.left,
+      dy: event.clientY - rect.top,
+      width: rect.width,
+    };
+    const next = clampPlace(rect.left, rect.top, rect.width);
+    setPlace({ x: next.x, y: next.y, width: rect.width });
+    event.preventDefault();
+  }
 
   function close() {
     if (onClose) {
@@ -38,9 +92,18 @@ export function AeroWindow({
 
   return (
     <section
+      ref={frameRef}
       className={`${frame} flex flex-col overflow-hidden rounded-xl border border-white/40 bg-white/20 shadow-2xl backdrop-blur-lg`}
+      style={
+        place && !maximized
+          ? { position: "fixed", left: place.x, top: place.y, width: place.width, zIndex: 30, marginTop: 0 }
+          : undefined
+      }
     >
-      <header className="flex h-9 shrink-0 items-center gap-2 bg-gradient-to-b from-white/70 via-sky-300/80 to-sky-700/90 px-3 text-sm text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+      <header
+        onMouseDown={onTitleDown}
+        className="flex h-9 shrink-0 items-center gap-2 bg-gradient-to-b from-white/70 via-sky-300/80 to-sky-700/90 px-3 text-sm text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]"
+      >
         <span className="truncate font-semibold drop-shadow">{title}</span>
         <span className="ml-auto flex items-center gap-1.5">
           {dialog ? null : (

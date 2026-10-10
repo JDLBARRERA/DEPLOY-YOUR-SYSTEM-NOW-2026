@@ -4,11 +4,21 @@
     "enforce_origin": false,
     "origins": ["http://127.0.0.1:2019", "http://localhost:2019"]
   },
+  "logging": {
+    "logs": {
+      "paas-access": {
+        "include": ["http.log.access.paas"],
+        "encoder": { "format": "json" },
+        "writer": { "output": "file", "filename": "/data/access.log" }
+      }
+    }
+  },
   "apps": {
     "http": {
       "servers": {
         "paas": {
           "listen": [":80", ":443"],
+          "logs": { "default_logger_name": "paas" },
           "routes": [
             {
               "@id": "route-catch-all",

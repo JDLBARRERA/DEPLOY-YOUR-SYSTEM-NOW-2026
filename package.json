@@ -7,7 +7,8 @@
     "dev": "tsx watch src/index.ts",
     "worker": "tsx watch src/workers/deployWorker.ts",
     "build": "tsc && node --input-type=module -e \"import fs from 'node:fs'; fs.cpSync('src/generated', 'dist/generated', { recursive: true })\"",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "usage": "tsx src/jobs/reportUsage.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",
@@ -19,7 +20,8 @@
     "fastify": "^5.12.5",
     "ioredis": "^5.8.0",
     "pg": "^8.23.1",
-    "simple-git": "^3.36.0"
+    "simple-git": "^3.36.0",
+    "stripe": "^23.0.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

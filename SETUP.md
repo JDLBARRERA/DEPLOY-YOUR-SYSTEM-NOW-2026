@@ -67,13 +67,13 @@ Un push a `main` dispara `.github/workflows/deploy.yml`, que solo reconstruye el
 
 ## Apps, dominios y bases
 
-Cada despliegue de producción queda en `{proyecto}.deplowe-now.com`. Si el proyecto tiene `customDomain`, Caddy añade ese host a la misma ruta. El contenedor de la app no publica puertos en el host: Caddy lo alcanza por la red de Docker.
+Cada despliegue de producción queda en `{proyecto}.deplowe-now.com`. Si el proyecto tiene `customDomain`, Caddy añade ese host a la misma ruta. El contenedor de la app no publica puertos en el host: Caddy lo alcanza por la red de Docker. Lleva la RAM y la CPU del proyecto, `--pids-limit=100` y `--restart=always`. Si el contenedor nuevo no queda en marcha, esa ruta no cambia.
 
 Un dominio que no es de `deplowe-now.com` entra por el puerto 80. Para el candado, Cloudflare con la nube naranja y SSL Flexible. En Full o Full (strict) Cloudflare habla por el 443 y el certificado del Droplet no incluye ese nombre.
 
-Un add-on Postgres es `postgres:15-alpine` con volumen en `/var/lib/postgresql/data`. Redis es `redis:7-alpine` con volumen en `/data`. El nombre del contenedor es el host de la cadena de conexión. Borrar el add-on borra el contenedor y el volumen.
+Un add-on Postgres es `postgres:15-alpine` con volumen en `/var/lib/postgresql/data`. Redis es `redis:7-alpine` con volumen en `/data`. El nombre del contenedor es el host de la cadena de conexión. Borrar el add-on borra el contenedor y el volumen. Una base creada desde Databases es `paas-db-<id>`, en la misma red, sin volumen.
 
-El Postgres de la plataforma sigue en el volumen `mi-paas_postgres_data`.
+El Postgres de la plataforma sigue en el volumen `mi-paas_postgres_data`. El proceso de la API, una vez al día, limpia imágenes colgantes, caché de build vieja y contenedores de app detenidos. No borra estos volúmenes ni los contenedores de bases.
 
 ## Comprobar
 
