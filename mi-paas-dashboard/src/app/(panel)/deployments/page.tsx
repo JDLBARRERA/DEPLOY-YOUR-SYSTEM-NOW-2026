@@ -8,6 +8,53 @@ import { ServiceTypeField, ServiceTypeMark, type ServiceType } from "@/component
 import { StatusBadge } from "@/components/status-badge";
 import { apiFetch, type Deployment } from "@/lib/api";
 
+const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function githubRepoPath(repoUrl: string): { owner: string; repo: string } | null {
+  try {
+    const url = new URL(repoUrl.trim());
+    if (url.hostname !== "github.com") {
+      return null;
+    }
+    const [owner, name] = url.pathname.split("/").filter(Boolean);
+    const repo = name?.replace(/\.git$/, "") ?? "";
+    if (!owner || !repo) {
+      return null;
+    }
+    return { owner, repo };
+  } catch {
+    return null;
+  }
+}
+
+function parseEnvExample(text: string): { key: string; value: string }[] {
+  const rows: { key: string; value: string }[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const body = trimmed.startsWith("export ") ? trimmed.slice("export ".length).trim() : trimmed;
+    const eq = body.indexOf("=");
+    if (eq <= 0) {
+      continue;
+    }
+    const key = body.slice(0, eq).trim();
+    if (!ENV_KEY.test(key)) {
+      continue;
+    }
+    let value = body.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
+    ) {
+      value = value.slice(1, -1);
+    }
+    rows.push({ key, value });
+  }
+  return rows;
+}
+
 export default function DeploymentsPage() {
   const [items, setItems] = useState<Deployment[] | null>(null);
   const [open, setOpen] = useState(false);
@@ -16,6 +63,10 @@ export default function DeploymentsPage() {
   const [logsFor, setLogsFor] = useState<Deployment | null>(null);
   const [serviceType, setServiceType] = useState<ServiceType>("web");
   const [envRows, setEnvRows] = useState<EnvDraft[]>([]);
+  const [envOpen, setEnvOpen] = useState(false);
+  const [envHint, setEnvHint] = useState("");
+  const [detecting, setDetecting] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const load = useCallback(async () => {
     const next = await apiFetch<Deployment[]>("/deployments");
@@ -75,6 +126,49 @@ export default function DeploymentsPage() {
     setOpen(false);
     setEnvRows([]);
     setServiceType("web");
+    setEnvOpen(false);
+    setEnvHint("");
+  }
+
+  function chooseService(next: ServiceType) {
+    setServiceType(next);
+    if (next === "worker") {
+      setEnvOpen(true);
+    }
+  }
+
+  async function detectEnvExample() {
+    setEnvHint("");
+    const data = new FormData(formRef.current ?? undefined);
+    const repoUrl = String(data.get("repoUrl") ?? "");
+    const branch = String(data.get("branch") ?? "main").trim() || "main";
+    const repo = githubRepoPath(repoUrl);
+    if (!repo) {
+      setEnvHint("No se encontró .env.example");
+      return;
+    }
+    const raw = `https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${encodeURIComponent(branch)}/.env.example`;
+    setDetecting(true);
+    try {
+      const response = await fetch(raw);
+      if (!response.ok) {
+        setEnvHint("No se encontró .env.example");
+        return;
+      }
+      const parsed = parseEnvExample(await response.text());
+      setEnvRows((rows) => {
+        const seen = new Set(rows.map((row) => row.key.trim()).filter((key) => key.length > 0));
+        const added = parsed.filter((row) => !seen.has(row.key));
+        return [
+          ...rows,
+          ...added.map((row) => ({ id: crypto.randomUUID(), key: row.key, value: row.value })),
+        ];
+      });
+    } catch {
+      setEnvHint("No se encontró .env.example");
+    } finally {
+      setDetecting(false);
+    }
   }
 
   function addEnvRow() {
@@ -198,7 +292,11 @@ export default function DeploymentsPage() {
       {open ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-4">
           <AeroWindow title="Nuevo Despliegue" dialog onClose={closeForm}>
-            <form className="flex max-h-[60vh] flex-col overflow-hidden" onSubmit={onSubmit}>
+            <form
+              ref={formRef}
+              className="flex max-h-[60vh] flex-col overflow-hidden"
+              onSubmit={onSubmit}
+            >
               <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
               <p className="text-sm text-slate-600">
                 El motor clona un repositorio público de GitHub y lo pone en cola.
@@ -225,7 +323,7 @@ export default function DeploymentsPage() {
                 defaultValue="main"
                 placeholder="main"
               />
-              <ServiceTypeField value={serviceType} onChange={setServiceType} />
+              <ServiceTypeField value={serviceType} onChange={chooseService} />
               <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-white/70 bg-white/60 px-2.5 py-2 text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
                 <input
                   type="checkbox"
@@ -241,7 +339,11 @@ export default function DeploymentsPage() {
                   </span>
                 </span>
               </label>
-              <details className="rounded-md border border-white/70 bg-white/40 px-2.5 py-2">
+              <details
+                open={envOpen}
+                onToggle={(event) => setEnvOpen(event.currentTarget.open)}
+                className="rounded-md border border-white/70 bg-white/40 px-2.5 py-2"
+              >
                 <summary className="cursor-pointer text-sm font-medium text-slate-800">
                   Variables de entorno
                 </summary>
@@ -283,11 +385,15 @@ export default function DeploymentsPage() {
                       </WinButton>
                     </div>
                   ))}
-                  <div>
+                  <div className="flex flex-wrap items-center gap-2">
                     <WinButton compact onClick={addEnvRow}>
                       Añadir variable
                     </WinButton>
+                    <WinButton compact disabled={detecting} onClick={() => void detectEnvExample()}>
+                      {detecting ? "Buscando..." : "Detectar variables del repo"}
+                    </WinButton>
                   </div>
+                  {envHint ? <p className="text-xs text-slate-500">{envHint}</p> : null}
                 </div>
               </details>
               </div>

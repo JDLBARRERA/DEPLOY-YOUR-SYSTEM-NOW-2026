@@ -25,12 +25,14 @@ export function ServiceTypeField({
           onClick={() => onChange("web")}
           icon={<Globe className="size-3.5" aria-hidden />}
           label="Web Service"
+          hint="Expuesto a internet con dominio propio y HTTPS (ej. API, Frontend)."
         />
         <ServiceChoice
           pressed={value === "worker"}
           onClick={() => onChange("worker")}
           icon={<Cog className="size-3.5" aria-hidden />}
           label="Background Worker"
+          hint="Proceso en segundo plano sin puerto web (ej. procesador de colas, cron)."
         />
       </div>
     </fieldset>
@@ -42,26 +44,31 @@ function ServiceChoice({
   onClick,
   icon,
   label,
+  hint,
 }: {
   pressed: boolean;
   onClick: () => void;
   icon: ReactNode;
   label: string;
+  hint: string;
 }) {
   return (
-    <button
-      type="button"
-      aria-pressed={pressed}
-      onClick={onClick}
-      className={`inline-flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-xs font-semibold ${
-        pressed
-          ? "border-sky-900/30 bg-white text-sky-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]"
-          : "border-white/70 bg-white/50 text-slate-600"
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        aria-pressed={pressed}
+        onClick={onClick}
+        className={`inline-flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-xs font-semibold ${
+          pressed
+            ? "border-sky-900/30 bg-white text-sky-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]"
+            : "border-white/70 bg-white/50 text-slate-600"
+        }`}
+      >
+        {icon}
+        {label}
+      </button>
+      <p className="text-[11px] leading-snug text-slate-500">{hint}</p>
+    </div>
   );
 }
 
