@@ -11,8 +11,15 @@ import {
   type ContainerDatabaseRecord,
   type DatabaseEngine,
 } from "../services/ContainerDatabaseService.js";
+import {
+  createHostedDatabase,
+  deleteHostedDatabase,
+  HostedDatabaseError,
+  listHostedDatabases,
+  type HostedDatabaseType,
+} from "../services/HostedDatabaseService.js";
 
-const ENGINES = ["postgres", "mysql", "redis"] as const;
+const ENGINES = ["postgres", "POSTGRES", "mysql", "redis", "REDIS"] as const;
 
 const createSchema = {
   type: "object",
@@ -100,10 +107,43 @@ function fromContainer(row: ContainerDatabaseRecord): DatabaseListItem {
   };
 }
 
+function fromHosted(row: {
+  id: string;
+  name: string;
+  type: HostedDatabaseType;
+  connectionString: string;
+  status: string;
+  createdAt: Date;
+}): DatabaseListItem & { connectionString: string } {
+  const engine: DatabaseEngine = row.type === "REDIS" ? "redis" : "postgres";
+  return {
+    id: row.id,
+    name: row.name,
+    type: engine,
+    status: row.status,
+    dbName: row.name,
+    host: `paas-db-${row.id}`,
+    port: engine === "redis" ? 6379 : 5432,
+    databaseUrl: row.connectionString,
+    pooledUrl: row.connectionString,
+    directUrl: row.connectionString,
+    connectionString: row.connectionString,
+    projectId: null,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+function hostedType(value: string | undefined): HostedDatabaseType | null {
+  if (value === "postgres" || value === "POSTGRES") return "POSTGRES";
+  if (value === "redis" || value === "REDIS") return "REDIS";
+  return null;
+}
+
 function sendError(error: unknown): { status: number; error: string } {
   if (
     error instanceof DatabaseManagerError ||
-    error instanceof ContainerDatabaseError
+    error instanceof ContainerDatabaseError ||
+    error instanceof HostedDatabaseError
   ) {
     return { status: 400, error: error.message };
   }
@@ -117,7 +157,7 @@ export async function databaseRoutes(
   containers: ContainerDatabaseService,
 ): Promise<void> {
   app.get("/databases", { preValidation: requireAdmin }, async () => {
-    const [legacy, docker] = await Promise.all([
+    const [legacy, docker, hosted] = await Promise.all([
       databases.listDatabases().catch((error: unknown) => {
         console.warn(
           "[databases] list Postgres omitido:",
@@ -132,23 +172,40 @@ export async function databaseRoutes(
         );
         return [] as Awaited<ReturnType<typeof containers.list>>;
       }),
+      listHostedDatabases().catch((error: unknown) => {
+        console.warn(
+          "[databases] list contenedores omitido:",
+          error instanceof Error ? error.message : error,
+        );
+        return [] as Awaited<ReturnType<typeof listHostedDatabases>>;
+      }),
     ]);
     return [
+      ...hosted.map(fromHosted),
       ...docker.map(fromContainer),
       ...legacy.map(fromLegacy),
     ];
   });
 
   app.post<{
-    Body: { name: string; type?: DatabaseEngine; projectId?: string };
+    Body: { name: string; type?: DatabaseEngine | "POSTGRES" | "REDIS"; projectId?: string };
   }>(
     "/databases",
     { schema: { body: createSchema }, preValidation: requireAdmin },
     async (request, reply) => {
       try {
         const type = request.body.type;
-        if (type) {
-          const created = await containers.create(request.body.name, type);
+        const hosted = hostedType(type);
+        if (hosted) {
+          const created = await createHostedDatabase(request.body.name, hosted);
+          const item = fromHosted(created);
+          return reply.code(201).send({
+            ...item,
+            DATABASE_URL: item.databaseUrl,
+          });
+        }
+        if (type === "mysql") {
+          const created = await containers.create(request.body.name, "mysql");
           return reply.code(201).send({
             ...fromContainer(created),
             DATABASE_URL: created.databaseUrl,
@@ -164,6 +221,21 @@ export async function databaseRoutes(
           ...item,
           DATABASE_URL: item.databaseUrl,
         });
+      } catch (error) {
+        const result = sendError(error);
+        return reply.code(result.status).send({ error: result.error });
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    "/databases/:id",
+    { preValidation: requireAdmin },
+    async (request, reply) => {
+      try {
+        await deleteHostedDatabase(request.params.id);
+        await containers.remove(request.params.id);
+        return reply.code(200).send({ ok: true });
       } catch (error) {
         const result = sendError(error);
         return reply.code(result.status).send({ error: result.error });

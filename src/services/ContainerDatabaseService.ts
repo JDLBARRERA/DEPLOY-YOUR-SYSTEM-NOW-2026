@@ -36,6 +36,46 @@ function recordKey(id: string): string {
   return `paas:database:${id}`;
 }
 
+function commandDetail(error: unknown): string {
+  if (!error || typeof error !== "object") {
+    return "";
+  }
+  const stderr = "stderr" in error ? String(error.stderr ?? "") : "";
+  const stdout = "stdout" in error ? String(error.stdout ?? "") : "";
+  const message = error instanceof Error ? error.message : "";
+  return `${stderr}\n${stdout}\n${message}`;
+}
+
+function containerPresence(name: string): "running" | "stopped" | "missing" | "unknown" {
+  if (!NAME_OK.test(name)) {
+    return "unknown";
+  }
+  try {
+    const running = execSync(`docker inspect --format="{{.State.Running}}" "${name}"`, {
+      stdio: "pipe",
+      encoding: "utf8",
+      timeout: 2000,
+    }).trim();
+    return running === "true" ? "running" : "stopped";
+  } catch (error) {
+    if (/No such (object|container)/i.test(commandDetail(error))) {
+      return "missing";
+    }
+    return "unknown";
+  }
+}
+
+function removeContainer(name: string): void {
+  if (!NAME_OK.test(name) || !name.startsWith("paas-db-")) {
+    return;
+  }
+  try {
+    execSync(`docker rm -f "${name}"`, { stdio: "pipe", timeout: 20000 });
+  } catch {
+    // El contenedor ya no está.
+  }
+}
+
 function slug(label: string): string {
   const base = label
     .toLowerCase()
@@ -57,7 +97,18 @@ export class ContainerDatabaseService {
     const rows = await Promise.all(ids.map((id) => this.get(id)));
     const present = rows.filter((row): row is ContainerDatabaseRecord => row !== null);
     await Promise.all(present.map((row) => this.refreshStatus(row)));
-    return present.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return present
+      .filter((row) => row.status !== "missing")
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async remove(id: string): Promise<void> {
+    const row = await this.get(id);
+    if (row) {
+      removeContainer(row.containerName);
+    }
+    await this.redis.del(recordKey(id));
+    await this.redis.srem(INDEX_KEY, id);
   }
 
   async get(id: string): Promise<ContainerDatabaseRecord | null> {
@@ -249,15 +300,17 @@ export class ContainerDatabaseService {
       await this.redis.hset(recordKey(record.id), { status: record.status });
       return;
     }
-    try {
-      const running = execSync(
-        `docker inspect --format="{{.State.Running}}" "${record.containerName}"`,
-        { stdio: "pipe", encoding: "utf8", timeout: 2000 },
-      ).trim();
-      record.status = running === "true" ? "running" : "stopped";
-    } catch {
-      // Docker socket caído: no tumbar el listado.
+    const presence = containerPresence(record.containerName);
+    if (presence === "missing") {
+      record.status = "missing";
+      await this.redis.del(recordKey(record.id));
+      await this.redis.srem(INDEX_KEY, record.id);
+      return;
+    }
+    if (presence === "unknown") {
       record.status = "unavailable";
+    } else {
+      record.status = presence;
     }
     await this.redis.hset(recordKey(record.id), {
       status: record.status,
