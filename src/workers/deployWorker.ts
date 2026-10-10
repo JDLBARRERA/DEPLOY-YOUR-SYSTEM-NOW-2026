@@ -345,6 +345,15 @@ const worker = new Worker<DeployJobData>(
         runtimeEnv.DATABASE_URL = withoutPrismaSchemaParam(runtimeEnv.DATABASE_URL);
       }
       runtimeEnv.DATABASE_URL = sanitizeDatabaseUrl(runtimeEnv.DATABASE_URL);
+      const databaseTarget = describeDatabaseTarget(runtimeEnv.DATABASE_URL);
+      await note(
+        `Database target: user=${databaseTarget.user}, host=${databaseTarget.host}, port=${databaseTarget.port}`,
+      );
+      if (databaseTarget.user === "postgresql") {
+        throw new Error(
+          "Fallo de validación: El usuario de DATABASE_URL es 'postgresql'. Verifique las credenciales de Neon en el panel.",
+        );
+      }
       runtimeEnv.PORT = String(CONTAINER_INTERNAL_PORT);
       runtimeEnv.NODE_ENV = "production";
       const envFlags = dockerEnvFlags(runtimeEnv);
@@ -680,10 +689,35 @@ function sanitizeDatabaseUrl(value: string): string {
   ) {
     url = url.slice(1, -1).trim();
   }
-  if (url.startsWith("postgresql://postgresql://")) {
-    url = url.replace("postgresql://postgresql://", "postgresql://");
+  while (
+    url.startsWith("postgresql://postgresql://") ||
+    url.startsWith("postgres://postgresql://")
+  ) {
+    url = url
+      .replace("postgresql://postgresql://", "postgresql://")
+      .replace("postgres://postgresql://", "postgresql://");
   }
   return url;
+}
+
+function describeDatabaseTarget(value: string): { user: string; host: string; port: string } {
+  try {
+    const parsed = new URL(value);
+    return {
+      user: parsed.username,
+      host: parsed.hostname,
+      port: parsed.port || "5432",
+    };
+  } catch {
+    const match = value.match(
+      /^postgres(?:ql)?:\/\/(?:([^:@/?#]+)(?::[^@/?#]*)?@)?([^:/?#]+)(?::(\d+))?/i,
+    );
+    return {
+      user: match?.[1] ?? "",
+      host: match?.[2] ?? "",
+      port: match?.[3] || "5432",
+    };
+  }
 }
 
 function withoutPrismaSchemaParam(value: string): string {
