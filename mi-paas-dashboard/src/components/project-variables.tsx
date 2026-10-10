@@ -137,9 +137,11 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
           {variables.map((variable) => (
             <li
               key={variable.id}
-              className="grid items-center gap-2 rounded-md border border-white/70 bg-white/60 p-2 sm:grid-cols-[8rem_minmax(0,1fr)_auto_auto]"
+              className="flex items-center gap-4 rounded-md border border-white/70 bg-white/60 p-2"
             >
-              <span className="truncate font-mono text-xs font-semibold">{variable.key}</span>
+              <span className="min-w-[260px] shrink-0 whitespace-nowrap font-mono text-xs font-semibold">
+                {variable.key}
+              </span>
               <input
                 type={visible[variable.id] ? "text" : "password"}
                 value={draftValue(variable)}
@@ -149,18 +151,18 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
                 onChange={(event) =>
                   setDrafts((current) => ({ ...current, [variable.id]: event.target.value }))
                 }
-                className="rounded-md border border-white/70 bg-white/80 px-2 py-1.5 font-mono text-xs text-slate-900"
+                className="min-w-0 flex-1 rounded-md border border-white/70 bg-white/80 px-2 py-1.5 font-mono text-xs text-slate-900"
               />
               <button
                 type="button"
-                className="text-left text-xs text-slate-700 underline"
+                className="shrink-0 text-left text-xs text-slate-700 underline"
                 onClick={() =>
                   setVisible((current) => ({ ...current, [variable.id]: !current[variable.id] }))
                 }
               >
                 {visible[variable.id] ? "Ocultar" : "Mostrar"}
               </button>
-              <div className="flex gap-3">
+              <div className="flex shrink-0 gap-3">
                 <button
                   type="button"
                   className="text-left text-xs text-sky-800 underline"
