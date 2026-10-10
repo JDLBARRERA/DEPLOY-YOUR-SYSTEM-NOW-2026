@@ -6,6 +6,7 @@ import { createDeployQueue } from "./queues/deployQueue.js";
 import { deploymentRoutes } from "./routes/deployments.js";
 import { databaseRoutes } from "./routes/databases.js";
 import { deployRoutes } from "./routes/deploy.js";
+import { environmentGroupRoutes } from "./routes/environmentGroups.js";
 import { projectRoutes } from "./routes/projects.js";
 import { githubWebhookRoutes } from "./routes/githubWebhook.js";
 import { prisma } from "./db.js";
@@ -112,6 +113,7 @@ await app.register((scope) =>
   }),
 );
 await databaseRoutes(app, databases, containerDatabases);
+await environmentGroupRoutes(app);
 await projectRoutes(app, store);
 
 try {

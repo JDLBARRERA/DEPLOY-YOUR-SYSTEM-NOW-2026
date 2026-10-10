@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { AeroWindow, WinButton, WinField } from "@/components/aero-window";
+import { LinkedGroupsField } from "@/components/linked-groups-field";
 import { ServiceTypeField, ServiceTypeMark, type ServiceType } from "@/components/service-type-field";
 import { StatusBadge } from "@/components/status-badge";
 import { apiFetch, type Deployment } from "@/lib/api";
@@ -66,6 +67,8 @@ export default function DeploymentsPage() {
   const [envOpen, setEnvOpen] = useState(false);
   const [envHint, setEnvHint] = useState("");
   const [detecting, setDetecting] = useState(false);
+  const [groups, setGroups] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   const formRef = useRef<HTMLFormElement>(null);
 
   const load = useCallback(async () => {
@@ -108,6 +111,7 @@ export default function DeploymentsPage() {
           branch,
           clearCache,
           serviceType,
+          environmentGroupIds: selectedGroupIds,
           variables,
         }),
       });
@@ -128,7 +132,25 @@ export default function DeploymentsPage() {
     setServiceType("web");
     setEnvOpen(false);
     setEnvHint("");
+    setSelectedGroupIds([]);
   }
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void apiFetch<Array<{ id: string; name: string }>>("/environment-groups")
+      .then((next) => {
+        if (!cancelled) {
+          setGroups(next.map((group) => ({ id: group.id, name: group.name })));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setGroups([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   function chooseService(next: ServiceType) {
     setServiceType(next);
@@ -324,6 +346,11 @@ export default function DeploymentsPage() {
                 placeholder="main"
               />
               <ServiceTypeField value={serviceType} onChange={chooseService} />
+              <LinkedGroupsField
+                groups={groups}
+                selected={selectedGroupIds}
+                onChange={setSelectedGroupIds}
+              />
               <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-white/70 bg-white/60 px-2.5 py-2 text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
                 <input
                   type="checkbox"

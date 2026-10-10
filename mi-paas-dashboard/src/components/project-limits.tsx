@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { WinButton } from "@/components/aero-window";
 import { ProjectAddons } from "@/components/project-addons";
 import { ProjectVariables } from "@/components/project-variables";
+import { LinkedGroupsField } from "@/components/linked-groups-field";
 import { ServiceTypeField, ServiceTypeMark, serviceTypeOf, type ServiceType } from "@/components/service-type-field";
 import { apiFetch } from "@/lib/api";
 
@@ -19,6 +20,8 @@ export interface ProjectLimits {
   githubToken: string;
   customDomain: string;
   serviceType: ServiceType;
+  environmentGroupIds: string[];
+  environmentGroups?: Array<{ id: string; name: string }>;
 }
 
 const MEMORY_OPTIONS = ["256m", "512m", "1g", "2g"];
@@ -29,6 +32,7 @@ export function ProjectLimitsCard() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [groups, setGroups] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,6 +45,7 @@ export function ProjectLimitsCard() {
               githubToken: "",
               customDomain: project.customDomain ?? "",
               serviceType: serviceTypeOf(project.serviceType),
+              environmentGroupIds: (project.environmentGroups ?? []).map((group) => group.id),
             })),
           );
         }
@@ -57,10 +62,33 @@ export function ProjectLimitsCard() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void apiFetch<Array<{ id: string; name: string }>>("/environment-groups")
+      .then((next) => {
+        if (!cancelled) setGroups(next.map((group) => ({ id: group.id, name: group.name })));
+      })
+      .catch(() => {
+        if (!cancelled) setGroups([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function update(
     id: string,
     patch: Partial<
-      Pick<ProjectLimits, "memoryLimit" | "cpuLimit" | "githubToken" | "hasGithubToken" | "customDomain" | "serviceType">
+      Pick<
+        ProjectLimits,
+        | "memoryLimit"
+        | "cpuLimit"
+        | "githubToken"
+        | "hasGithubToken"
+        | "customDomain"
+        | "serviceType"
+        | "environmentGroupIds"
+      >
     >,
   ) {
     setProjects((current) =>
@@ -113,6 +141,7 @@ export function ProjectLimitsCard() {
           cpuLimit: Number(project.cpuLimit),
           customDomain: project.customDomain.trim(),
           serviceType: project.serviceType,
+          environmentGroupIds: project.environmentGroupIds,
           ...(project.githubToken.trim() ? { githubToken: project.githubToken.trim() } : {}),
         }),
       });
@@ -120,6 +149,10 @@ export function ProjectLimitsCard() {
         ...saved,
         githubToken: "",
         customDomain: saved.customDomain ?? "",
+        serviceType: serviceTypeOf(saved.serviceType),
+        environmentGroupIds: saved.environmentGroups
+          ? saved.environmentGroups.map((group) => group.id)
+          : project.environmentGroupIds,
       });
       toast.success(`Configuración de ${project.name} guardada`);
     } catch (error) {
@@ -197,6 +230,11 @@ export function ProjectLimitsCard() {
               <ServiceTypeField
                 value={project.serviceType}
                 onChange={(serviceType) => update(project.id, { serviceType })}
+              />
+              <LinkedGroupsField
+                groups={groups}
+                selected={project.environmentGroupIds}
+                onChange={(environmentGroupIds) => update(project.id, { environmentGroupIds })}
               />
               <label className="flex flex-col gap-1 text-xs">
                 Dominio personalizado

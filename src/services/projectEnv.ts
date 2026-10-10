@@ -58,6 +58,47 @@ export function redactEnvValues(text: string, env: Record<string, string>): stri
   return redacted;
 }
 
+export async function replaceProjectEnvironmentGroups(
+  projectId: string,
+  groupIds: string[],
+): Promise<void> {
+  const unique = [...new Set(groupIds.map((id) => id.trim()).filter((id) => id.length > 0))];
+  const found = await prisma.environmentGroup.findMany({
+    where: { id: { in: unique } },
+    select: { id: true },
+  });
+  if (found.length !== unique.length) {
+    throw new Error("Hay un grupo que no existe");
+  }
+  await prisma.$transaction([
+    prisma.projectEnvironmentGroup.deleteMany({ where: { projectId } }),
+    ...(unique.length > 0
+      ? [
+          prisma.projectEnvironmentGroup.createMany({
+            data: unique.map((groupId) => ({ projectId, groupId })),
+          }),
+        ]
+      : []),
+  ]);
+}
+
+export function mergeGroupAndProjectVariables(
+  links: Array<{ group: { name: string; variables: Array<{ key: string; value: string }> } }>,
+  projectVariables: Array<{ key: string; value: string }>,
+): Array<{ key: string; value: string }> {
+  const ordered = [...links].sort((left, right) => left.group.name.localeCompare(right.group.name));
+  const merged = new Map<string, string>();
+  for (const link of ordered) {
+    for (const variable of link.group.variables) {
+      merged.set(variable.key, variable.value);
+    }
+  }
+  for (const variable of projectVariables) {
+    merged.set(variable.key, variable.value);
+  }
+  return [...merged].map(([key, value]) => ({ key, value }));
+}
+
 export function normalizeEnvPair(key: string, value: string): { key: string; value: string } {
   const normalizedKey = key.trim();
   if (!ENV_KEY.test(normalizedKey) || normalizedKey.length > 128) {
@@ -177,6 +218,16 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
           variables: {
             select: { key: true, value: true },
           },
+          environmentGroups: {
+            select: {
+              group: {
+                select: {
+                  name: true,
+                  variables: { select: { key: true, value: true } },
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -202,7 +253,10 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
     githubToken: deployment.project.githubToken,
     customDomain: deployment.project.customDomain,
     serviceType: deployment.project.serviceType === "worker" ? "worker" : "web",
-    plainVariables: deployment.project.variables,
+    plainVariables: mergeGroupAndProjectVariables(
+      deployment.project.environmentGroups,
+      deployment.project.variables,
+    ),
     variables: deployment.project.env.map((variable: any) => ({
       key: variable.key,
       value: variable.value,

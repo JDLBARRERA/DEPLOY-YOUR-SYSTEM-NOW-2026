@@ -13,6 +13,7 @@ import {
   updateProjectVariable,
   deleteProjectVariable,
   normalizeEnvPair,
+  replaceProjectEnvironmentGroups,
 } from "../services/projectEnv.js";
 import type { DeploymentStore } from "../services/DeploymentStore.js";
 import {
@@ -45,6 +46,11 @@ const updateSchema = {
     githubToken: { type: "string", maxLength: 300 },
     customDomain: { type: "string", maxLength: 253 },
     serviceType: { type: "string", enum: ["web", "worker"] },
+    environmentGroupIds: {
+      type: "array",
+      maxItems: 50,
+      items: { type: "string", minLength: 1, maxLength: 64 },
+    },
   },
 } as const;
 
@@ -58,13 +64,32 @@ const projectSelect = {
   githubToken: true,
   customDomain: true,
   serviceType: true,
+  environmentGroups: {
+    select: {
+      group: { select: { id: true, name: true } },
+    },
+  },
 } as const;
 
-function publicProject<T extends { githubToken: string | null }>(
+function publicProject<
+  T extends {
+    githubToken: string | null;
+    environmentGroups?: Array<{ group: { id: string; name: string } }>;
+  },
+>(
   project: T,
-): Omit<T, "githubToken"> & { hasGithubToken: boolean } {
-  const { githubToken, ...rest } = project;
-  return { ...rest, hasGithubToken: Boolean(githubToken?.trim()) };
+): Omit<T, "githubToken" | "environmentGroups"> & {
+  hasGithubToken: boolean;
+  environmentGroups: Array<{ id: string; name: string }>;
+} {
+  const { githubToken, environmentGroups, ...rest } = project;
+  return {
+    ...rest,
+    hasGithubToken: Boolean(githubToken?.trim()),
+    environmentGroups: (environmentGroups ?? [])
+      .map((link) => link.group)
+      .sort((left, right) => left.name.localeCompare(right.name)),
+  };
 }
 
 function validToken(value: string): boolean {
@@ -340,6 +365,7 @@ export async function projectRoutes(
       githubToken?: string;
       customDomain?: string;
       serviceType?: "web" | "worker";
+      environmentGroupIds?: string[];
     };
   }>(
     "/projects/:id",
@@ -399,9 +425,29 @@ export async function projectRoutes(
         cpuLimit === undefined &&
         githubToken === undefined &&
         customDomain === undefined &&
-        serviceType === undefined
+        serviceType === undefined &&
+        request.body.environmentGroupIds === undefined
       ) {
         return reply.code(400).send({ error: "No hay cambios para guardar" });
+      }
+      if (request.body.environmentGroupIds !== undefined) {
+        const exists = await prisma.project.findUnique({
+          where: { id: request.params.id },
+          select: { id: true },
+        });
+        if (!exists) {
+          return reply.code(404).send({ error: "Proyecto no encontrado" });
+        }
+        try {
+          await replaceProjectEnvironmentGroups(
+            request.params.id,
+            request.body.environmentGroupIds,
+          );
+        } catch (error) {
+          return reply.code(400).send({
+            error: error instanceof Error ? error.message : "No se pudieron vincular los grupos",
+          });
+        }
       }
 
       try {

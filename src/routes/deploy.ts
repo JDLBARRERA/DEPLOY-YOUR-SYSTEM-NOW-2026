@@ -13,7 +13,7 @@ import {
 } from "../services/DeployEngine.js";
 import type { DeploymentStore } from "../services/DeploymentStore.js";
 import type { LogBus } from "../services/LogBus.js";
-import { normalizeEnvPair } from "../services/projectEnv.js";
+import { normalizeEnvPair, replaceProjectEnvironmentGroups } from "../services/projectEnv.js";
 
 const deployBodySchema = {
   type: "object",
@@ -27,6 +27,11 @@ const deployBodySchema = {
     commitHash: { type: "string", minLength: 7 },
     clearCache: { type: "boolean" },
     serviceType: { type: "string", enum: ["web", "worker"] },
+    environmentGroupIds: {
+      type: "array",
+      maxItems: 50,
+      items: { type: "string", minLength: 1, maxLength: 64 },
+    },
     variables: {
       type: "array",
       maxItems: 50,
@@ -51,6 +56,7 @@ interface DeployBody {
   commitHash?: string;
   clearCache?: boolean;
   serviceType?: "web" | "worker";
+  environmentGroupIds?: string[];
   variables?: Array<{ key: string; value: string }>;
 }
 
@@ -190,12 +196,15 @@ export async function deployRoutes(
         const serviceType = request.body.serviceType === "worker" ? "worker" : "web";
         const image = normalizeImageName(request.body.projectName);
         const variables = parsedVariables(request.body.variables);
+        const environmentGroupIds = request.body.environmentGroupIds;
         const projectId = await projectForDeploy(
           request.body.projectName,
           image,
           request.body.repoUrl,
           branch,
-          variables.length > 0 || serviceType === "worker",
+          variables.length > 0 ||
+            serviceType === "worker" ||
+            (environmentGroupIds?.length ?? 0) > 0,
           serviceType,
         );
         if (projectId) {
@@ -205,6 +214,15 @@ export async function deployRoutes(
           });
           if (variables.length > 0) {
             await saveProjectVariables(projectId, variables);
+          }
+          if (environmentGroupIds) {
+            try {
+              await replaceProjectEnvironmentGroups(projectId, environmentGroupIds);
+            } catch (error) {
+              throw new DeployValidationError(
+                error instanceof Error ? error.message : "No se pudieron vincular los grupos",
+              );
+            }
           }
         }
         const deploymentId =

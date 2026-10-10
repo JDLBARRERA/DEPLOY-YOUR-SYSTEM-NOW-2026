@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { FolderOpen, HardDrive, Monitor, Settings } from "lucide-react";
+import { FolderOpen, HardDrive, Layers, Monitor, Settings } from "lucide-react";
 import { DnOrb } from "@/components/dn-orb";
 
 const icons = [
   { href: "/", label: "Overview", icon: Monitor },
   { href: "/deployments", label: "Deployments", icon: FolderOpen },
   { href: "/databases", label: "Databases", icon: HardDrive },
+  { href: "/environment-groups", label: "Environment Groups", icon: Layers },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -17,6 +18,7 @@ const titles: Record<string, string> = {
   "/": "Overview",
   "/deployments": "Deployments",
   "/databases": "Databases",
+  "/environment-groups": "Environment Groups",
   "/settings": "Settings",
 };
 
