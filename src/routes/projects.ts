@@ -20,8 +20,6 @@ import {
   DatabaseAddonService,
   type AddonType,
 } from "../services/DatabaseAddonService.js";
-import { stopRunningDeployments } from "../services/deploymentLifetime.js";
-
 const execAsync = promisify(exec);
 const MEMORY_LIMIT = /^(\d+(?:\.\d+)?)\s*(b|k|kb|m|mb|g|gb)$/i;
 const APP_CONTAINER_REF = /^paas-[a-f0-9]{16}$/;
@@ -454,7 +452,6 @@ export async function projectRoutes(
       }
 
       try {
-        await stopRunningDeployments(project.id);
         await prisma.deployment.deleteMany({ where: { projectId: project.id } });
         await prisma.project.delete({ where: { id: project.id } });
         return { ok: true };
