@@ -48,6 +48,7 @@ export interface LocalProject {
   cpuLimit: number;
   githubToken?: string | null;
   customDomain?: string | null;
+  serviceType?: "web" | "worker";
 }
 
 export interface PanelSettings {
@@ -337,12 +338,14 @@ export function listProjects(): LocalProject[] {
       cpuLimit: 0.5,
       githubToken: null,
       customDomain: null,
+      serviceType: "web",
     });
   }
   return [...saved.values()]
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(({ githubToken, ...project }) => ({
       ...project,
+      serviceType: project.serviceType === "worker" ? "worker" : "web",
       hasGithubToken: Boolean(githubToken?.trim()),
     }));
 }
@@ -383,7 +386,13 @@ export function deleteLocalProject(id: string): boolean {
 
 export function updateProjectLimits(
   id: string,
-  patch: { memoryLimit?: string; cpuLimit?: number; githubToken?: string; customDomain?: string },
+  patch: {
+    memoryLimit?: string;
+    cpuLimit?: number;
+    githubToken?: string;
+    customDomain?: string;
+    serviceType?: "web" | "worker";
+  },
 ): Omit<LocalProject, "githubToken"> & { hasGithubToken: boolean } | null {
   const store = ensureStore();
   const saved = new Map((store.projects ?? []).map((project) => [project.id, project]));
@@ -401,6 +410,7 @@ export function updateProjectLimits(
     cpuLimit: current?.cpuLimit ?? 0.5,
     githubToken: null,
     customDomain: current?.customDomain ?? null,
+    serviceType: current?.serviceType === "worker" ? "worker" : "web",
   };
   let customDomain = base.customDomain ?? null;
   if (patch.customDomain !== undefined) {
@@ -427,6 +437,12 @@ export function updateProjectLimits(
         ? base.githubToken ?? null
         : patch.githubToken.trim() || null,
     customDomain,
+    serviceType:
+      patch.serviceType === "worker" || patch.serviceType === "web"
+        ? patch.serviceType
+        : base.serviceType === "worker"
+          ? "worker"
+          : "web",
   };
   saved.set(id, next);
   store.projects = [...saved.values()];

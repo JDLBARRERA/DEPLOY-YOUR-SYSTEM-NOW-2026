@@ -98,6 +98,7 @@ model Project {
   cpuLimit    Float        @default(0.5)
   githubToken  String?
   customDomain String?      @unique
+  serviceType String       @default("web")
   teamId      String
   team        Team         @relation(fields: [teamId], references: [id])
   envVars     Json         @default("{}")

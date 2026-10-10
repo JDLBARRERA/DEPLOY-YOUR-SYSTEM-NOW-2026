@@ -144,6 +144,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
   cpuLimit: number;
   githubToken: string | null;
   customDomain: string | null;
+  serviceType: "web" | "worker";
   plainVariables: Array<{ key: string; value: string }>;
 }> {
   if (!deploymentId) {
@@ -154,6 +155,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
       cpuLimit: 0.5,
       githubToken: null,
       customDomain: null,
+      serviceType: "web",
       plainVariables: [],
     };
   }
@@ -168,6 +170,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
           cpuLimit: true,
           githubToken: true,
           customDomain: true,
+          serviceType: true,
           env: {
             select: { key: true, value: true, environment: true },
           },
@@ -187,6 +190,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
       cpuLimit: 0.5,
       githubToken: null,
       customDomain: null,
+      serviceType: "web",
       plainVariables: [],
     };
   }
@@ -197,6 +201,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
     cpuLimit: deployment.project.cpuLimit || 0.5,
     githubToken: deployment.project.githubToken,
     customDomain: deployment.project.customDomain,
+    serviceType: deployment.project.serviceType === "worker" ? "worker" : "web",
     plainVariables: deployment.project.variables,
     variables: deployment.project.env.map((variable: any) => ({
       key: variable.key,

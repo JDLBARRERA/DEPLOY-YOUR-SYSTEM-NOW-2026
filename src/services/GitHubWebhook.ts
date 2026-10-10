@@ -231,6 +231,9 @@ export class GitHubWebhookService {
           image,
           deploymentId: deployment.id,
           branch: target.branch,
+          commitHash: target.commitHash,
+          trigger: "webhook",
+          serviceType: project.serviceType === "worker" ? "worker" : "web",
           env,
         });
       } catch (error) {

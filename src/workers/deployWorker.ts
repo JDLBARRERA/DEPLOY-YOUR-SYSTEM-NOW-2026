@@ -36,6 +36,7 @@ const logs = new LogBus(connection);
 const caddy = new CaddyClient();
 const concurrency = Number(process.env.DEPLOY_CONCURRENCY ?? 5);
 const HEALTH_TIMEOUT_MS = 20_000;
+const WORKER_HEALTH_TIMEOUT_MS = 15_000;
 const HEALTH_INTERVAL_MS = 1_500;
 const LOCK_DURATION_MS = 300_000;
 
@@ -226,7 +227,11 @@ const worker = new Worker<DeployJobData>(
         githubToken,
         customDomain,
         plainVariables,
+        serviceType,
       } = await variablesForDeployment(deploymentId);
+      const isWorker = serviceType === "worker";
+      await store.update(projectId, { serviceType });
+      await note(`Tipo de servicio: ${serviceType}`);
 
       await note(`Clonando repositorio (rama ${branch})...`);
       const cloneUrl = githubCloneUrl(repoUrl, githubToken);
@@ -370,7 +375,9 @@ const worker = new Worker<DeployJobData>(
           // La red ya existe, ignorar
         }
       }
-      await ensureCaddyOnNetwork(deployNetwork);
+      if (!isWorker) {
+        await ensureCaddyOnNetwork(deployNetwork);
+      }
 
       const runtimeEnv = selectEnv(variables, deploymentType);
       for (const variable of plainVariables) {
@@ -392,7 +399,9 @@ const worker = new Worker<DeployJobData>(
           "Fallo de validación: El usuario de DATABASE_URL es 'postgresql'. Verifique las credenciales de Neon en el panel.",
         );
       }
-      runtimeEnv.PORT = String(CONTAINER_INTERNAL_PORT);
+      if (!isWorker) {
+        runtimeEnv.PORT = String(CONTAINER_INTERNAL_PORT);
+      }
       runtimeEnv.NODE_ENV = "production";
       const envFlags = dockerEnvFlags(runtimeEnv);
 
@@ -427,9 +436,16 @@ const worker = new Worker<DeployJobData>(
       try {
         paused = await pausePreviousContainers(appName, projectId, note);
         await note(
-          `Health check: HTTP HEAD :${CONTAINER_INTERNAL_PORT} cada ${HEALTH_INTERVAL_MS / 1000}s durante hasta ${HEALTH_TIMEOUT_MS / 1000}s, sin reinicios...`,
+          isWorker
+            ? "Health check: docker inspect Running cada 1.5s durante hasta 15s, sin reinicios..."
+            : `Health check: HTTP HEAD :${CONTAINER_INTERNAL_PORT} cada ${HEALTH_INTERVAL_MS / 1000}s durante hasta ${HEALTH_TIMEOUT_MS / 1000}s, sin reinicios...`,
         );
-        health = await checkContainerHealth(containerId, deployNetwork, note);
+        health = await checkContainerHealth(
+          containerId,
+          deployNetwork,
+          note,
+          isWorker ? "process" : "http",
+        );
       } finally {
         stopAppLogs();
       }
@@ -465,24 +481,9 @@ const worker = new Worker<DeployJobData>(
         throw new Error(health.reason);
       }
 
-      let routed = false;
-      try {
-        const domainHost = deploymentType === "PRODUCTION" ? customDomain : null;
-        await caddy.upsertRoute(projectId, host, upstream, domainHost);
-        routed = true;
-        await note(
-          domainHost
-            ? `Contenedor levantado y enrutado vía ${upstream} (${host}, ${domainHost}).`
-            : `Contenedor levantado y enrutado vía ${upstream}.`,
-        );
-      } catch (caddyError) {
-        const caddyMessage = commandError(caddyError);
-        await note(
-          `Contenedor saludable (${containerName}), pero el enrutamiento de Caddy falló: ${caddyMessage}`,
-        );
-      }
-
-      if (routed) {
+      let routed = isWorker;
+      if (isWorker) {
+        await note(`Worker ${containerName} en marcha. Sin ruta de Caddy.`);
         try {
           await retirePreviousDeploys(appName, projectId, note, paused);
         } catch (error) {
@@ -491,7 +492,33 @@ const worker = new Worker<DeployJobData>(
           );
         }
       } else {
-        await resumeContainers(paused, note);
+        try {
+          const domainHost = deploymentType === "PRODUCTION" ? customDomain : null;
+          await caddy.upsertRoute(projectId, host, upstream, domainHost);
+          routed = true;
+          await note(
+            domainHost
+              ? `Contenedor levantado y enrutado vía ${upstream} (${host}, ${domainHost}).`
+              : `Contenedor levantado y enrutado vía ${upstream}.`,
+          );
+        } catch (caddyError) {
+          const caddyMessage = commandError(caddyError);
+          await note(
+            `Contenedor saludable (${containerName}), pero el enrutamiento de Caddy falló: ${caddyMessage}`,
+          );
+        }
+
+        if (routed) {
+          try {
+            await retirePreviousDeploys(appName, projectId, note, paused);
+          } catch (error) {
+            await note(
+              `No se pudieron retirar los contenedores anteriores: ${commandError(error)}`,
+            );
+          }
+        } else {
+          await resumeContainers(paused, note);
+        }
       }
 
       await recordDuration();
@@ -953,11 +980,58 @@ async function probeHttp(ip: string, port: number): Promise<number | null> {
   }
 }
 
+async function checkProcessHealth(
+  containerId: string,
+  note?: (message: string) => Promise<void>,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const deadline = Date.now() + WORKER_HEALTH_TIMEOUT_MS;
+  let attempt = 0;
+  let last = containerState(containerId);
+
+  while (Date.now() <= deadline) {
+    attempt += 1;
+    last = containerState(containerId);
+    const failed = healthFailure(last);
+    if (failed) {
+      return { ok: false, reason: failed };
+    }
+    if (note) {
+      await note(
+        `Health check intento ${attempt}: Running=${last.running} (estado "${last.status}", RestartCount=${last.restartCount}).`,
+      );
+    }
+    if (Date.now() + HEALTH_INTERVAL_MS > deadline) {
+      break;
+    }
+    await sleep(HEALTH_INTERVAL_MS);
+  }
+
+  last = containerState(containerId);
+  const failed = healthFailure(last);
+  if (failed) {
+    return { ok: false, reason: failed };
+  }
+  if (last.running && last.status === "running" && last.restartCount === 0) {
+    if (note) {
+      await note("Health check OK: sigue running tras 15s, sin reinicios.");
+    }
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    reason: `Health check falló tras 15s: estado "${last.status}", RestartCount=${last.restartCount}.`,
+  };
+}
+
 async function checkContainerHealth(
   containerId: string,
   network: string,
   note?: (message: string) => Promise<void>,
+  mode: "http" | "process" = "http",
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (mode === "process") {
+    return checkProcessHealth(containerId, note);
+  }
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   let attempt = 0;
   let last = containerState(containerId);

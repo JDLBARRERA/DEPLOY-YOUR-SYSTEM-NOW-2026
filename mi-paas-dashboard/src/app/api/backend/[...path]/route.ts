@@ -136,6 +136,7 @@ async function localFallback(
       cpuLimit?: number;
       githubToken?: string;
       customDomain?: string;
+      serviceType?: "web" | "worker";
     };
     let updated: ReturnType<typeof updateProjectLimits>;
     try {

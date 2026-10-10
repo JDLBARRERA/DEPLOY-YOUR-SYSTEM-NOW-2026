@@ -12,6 +12,7 @@ export interface DeploymentRecord {
   commitHash?: string;
   commitMessage?: string;
   commitAuthor?: string;
+  serviceType?: "web" | "worker";
   finishedAt?: string;
   trigger?: "manual" | "webhook";
 }

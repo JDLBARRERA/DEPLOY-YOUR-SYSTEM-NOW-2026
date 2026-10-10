@@ -26,6 +26,7 @@ const deployBodySchema = {
     branch: { type: "string", minLength: 1 },
     commitHash: { type: "string", minLength: 7 },
     clearCache: { type: "boolean" },
+    serviceType: { type: "string", enum: ["web", "worker"] },
     variables: {
       type: "array",
       maxItems: 50,
@@ -49,6 +50,7 @@ interface DeployBody {
   branch?: string;
   commitHash?: string;
   clearCache?: boolean;
+  serviceType?: "web" | "worker";
   variables?: Array<{ key: string; value: string }>;
 }
 
@@ -88,6 +90,7 @@ async function projectForDeploy(
   repoUrl: string,
   branch: string,
   createIfMissing: boolean,
+  serviceType: "web" | "worker",
 ): Promise<string | undefined> {
   const projects = await prisma.project.findMany({ select: { id: true, name: true } });
   const exact = projects.find((project) => project.name.trim() === projectName.trim());
@@ -118,6 +121,7 @@ async function projectForDeploy(
       repoUrl,
       branch,
       teamId: team.id,
+      serviceType,
     },
     select: { id: true },
   });
@@ -183,20 +187,25 @@ export async function deployRoutes(
         if (commitHash) {
           assertGitCommit(commitHash);
         }
+        const serviceType = request.body.serviceType === "worker" ? "worker" : "web";
         const image = normalizeImageName(request.body.projectName);
         const variables = parsedVariables(request.body.variables);
-        if (variables.length > 0) {
-          const projectId = await projectForDeploy(
-            request.body.projectName,
-            image,
-            request.body.repoUrl,
-            branch,
-            true,
-          );
-          if (!projectId) {
-            throw new DeployValidationError("No hay un equipo para guardar las variables");
+        const projectId = await projectForDeploy(
+          request.body.projectName,
+          image,
+          request.body.repoUrl,
+          branch,
+          variables.length > 0 || serviceType === "worker",
+          serviceType,
+        );
+        if (projectId) {
+          await prisma.project.update({
+            where: { id: projectId },
+            data: { serviceType },
+          });
+          if (variables.length > 0) {
+            await saveProjectVariables(projectId, variables);
           }
-          await saveProjectVariables(projectId, variables);
         }
         const deploymentId =
           request.body.deploymentId ??
@@ -210,6 +219,7 @@ export async function deployRoutes(
           commitHash: commitHash || undefined,
           clearCache: request.body.clearCache === true,
           trigger: "manual",
+          serviceType,
         });
 
         return reply.code(202).send({

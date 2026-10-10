@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { AeroWindow, WinButton, WinField } from "@/components/aero-window";
+import { ServiceTypeField, ServiceTypeMark, type ServiceType } from "@/components/service-type-field";
 import { StatusBadge } from "@/components/status-badge";
 import { apiFetch, type Deployment } from "@/lib/api";
 
@@ -13,6 +14,7 @@ export default function DeploymentsPage() {
   const [pending, setPending] = useState(false);
   const [redeployingId, setRedeployingId] = useState<string | null>(null);
   const [logsFor, setLogsFor] = useState<Deployment | null>(null);
+  const [serviceType, setServiceType] = useState<ServiceType>("web");
   const [envRows, setEnvRows] = useState<EnvDraft[]>([]);
 
   const load = useCallback(async () => {
@@ -54,6 +56,7 @@ export default function DeploymentsPage() {
           projectName: String(form.get("projectName") ?? ""),
           branch,
           clearCache,
+          serviceType,
           variables,
         }),
       });
@@ -71,6 +74,7 @@ export default function DeploymentsPage() {
   function closeForm() {
     setOpen(false);
     setEnvRows([]);
+    setServiceType("web");
   }
 
   function addEnvRow() {
@@ -146,6 +150,7 @@ export default function DeploymentsPage() {
                     <tr key={item.projectId} className="border-t border-white/50">
                       <td className="break-words px-2.5 py-1.5 font-medium">
                         {item.projectName}
+                        <ServiceTypeMark serviceType={item.serviceType} />
                       </td>
                       <td className="break-all px-2.5 py-1.5 font-mono text-xs leading-snug">
                         {item.repoUrl}
@@ -220,6 +225,7 @@ export default function DeploymentsPage() {
                 defaultValue="main"
                 placeholder="main"
               />
+              <ServiceTypeField value={serviceType} onChange={setServiceType} />
               <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-white/70 bg-white/60 px-2.5 py-2 text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
                 <input
                   type="checkbox"

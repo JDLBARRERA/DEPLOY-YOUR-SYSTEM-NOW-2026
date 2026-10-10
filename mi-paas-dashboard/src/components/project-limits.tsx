@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { WinButton } from "@/components/aero-window";
 import { ProjectAddons } from "@/components/project-addons";
 import { ProjectVariables } from "@/components/project-variables";
+import { ServiceTypeField, ServiceTypeMark, serviceTypeOf, type ServiceType } from "@/components/service-type-field";
 import { apiFetch } from "@/lib/api";
 
 export interface ProjectLimits {
@@ -17,6 +18,7 @@ export interface ProjectLimits {
   hasGithubToken: boolean;
   githubToken: string;
   customDomain: string;
+  serviceType: ServiceType;
 }
 
 const MEMORY_OPTIONS = ["256m", "512m", "1g", "2g"];
@@ -38,6 +40,7 @@ export function ProjectLimitsCard() {
               ...project,
               githubToken: "",
               customDomain: project.customDomain ?? "",
+              serviceType: serviceTypeOf(project.serviceType),
             })),
           );
         }
@@ -57,7 +60,7 @@ export function ProjectLimitsCard() {
   function update(
     id: string,
     patch: Partial<
-      Pick<ProjectLimits, "memoryLimit" | "cpuLimit" | "githubToken" | "hasGithubToken" | "customDomain">
+      Pick<ProjectLimits, "memoryLimit" | "cpuLimit" | "githubToken" | "hasGithubToken" | "customDomain" | "serviceType">
     >,
   ) {
     setProjects((current) =>
@@ -109,6 +112,7 @@ export function ProjectLimitsCard() {
           memoryLimit: project.memoryLimit,
           cpuLimit: Number(project.cpuLimit),
           customDomain: project.customDomain.trim(),
+          serviceType: project.serviceType,
           ...(project.githubToken.trim() ? { githubToken: project.githubToken.trim() } : {}),
         }),
       });
@@ -150,7 +154,10 @@ export function ProjectLimitsCard() {
                     setOpenId((current) => (current === project.id ? null : project.id))
                   }
                 >
-                  <p className="truncate text-sm font-semibold">{project.name}</p>
+                  <p className="truncate text-sm font-semibold">
+                    {project.name}
+                    <ServiceTypeMark serviceType={project.serviceType} />
+                  </p>
                   <p className="break-all font-mono text-xs text-slate-500">{project.repoUrl}</p>
                 </button>
                 <div className="flex shrink-0 items-center gap-2">
@@ -187,6 +194,10 @@ export function ProjectLimitsCard() {
                 void save(project);
               }}
             >
+              <ServiceTypeField
+                value={project.serviceType}
+                onChange={(serviceType) => update(project.id, { serviceType })}
+              />
               <label className="flex flex-col gap-1 text-xs">
                 Dominio personalizado
                 <input

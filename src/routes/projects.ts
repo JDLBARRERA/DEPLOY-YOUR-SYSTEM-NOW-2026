@@ -44,6 +44,7 @@ const updateSchema = {
     cpuLimit: { type: "number", minimum: 0.05, maximum: 16 },
     githubToken: { type: "string", maxLength: 300 },
     customDomain: { type: "string", maxLength: 253 },
+    serviceType: { type: "string", enum: ["web", "worker"] },
   },
 } as const;
 
@@ -56,6 +57,7 @@ const projectSelect = {
   cpuLimit: true,
   githubToken: true,
   customDomain: true,
+  serviceType: true,
 } as const;
 
 function publicProject<T extends { githubToken: string | null }>(
@@ -337,6 +339,7 @@ export async function projectRoutes(
       cpuLimit?: number;
       githubToken?: string;
       customDomain?: string;
+      serviceType?: "web" | "worker";
     };
   }>(
     "/projects/:id",
@@ -362,6 +365,17 @@ export async function projectRoutes(
           });
         }
       }
+      const serviceType =
+        request.body.serviceType === undefined
+          ? undefined
+          : request.body.serviceType === "worker"
+            ? "worker"
+            : request.body.serviceType === "web"
+              ? "web"
+              : null;
+      if (serviceType === null) {
+        return reply.code(400).send({ error: "serviceType debe ser web o worker" });
+      }
       if (memoryLimit !== undefined && !validMemory(memoryLimit)) {
         return reply.code(400).send({
           error: "memoryLimit debe ser una cantidad como 256m, 512m o 1g",
@@ -384,7 +398,8 @@ export async function projectRoutes(
         memoryLimit === undefined &&
         cpuLimit === undefined &&
         githubToken === undefined &&
-        customDomain === undefined
+        customDomain === undefined &&
+        serviceType === undefined
       ) {
         return reply.code(400).send({ error: "No hay cambios para guardar" });
       }
@@ -397,6 +412,7 @@ export async function projectRoutes(
             ...(cpuLimit !== undefined ? { cpuLimit } : {}),
             ...(githubToken !== undefined ? { githubToken: githubToken || null } : {}),
             ...(customDomain !== undefined ? { customDomain } : {}),
+            ...(serviceType !== undefined ? { serviceType } : {}),
           },
           select: projectSelect,
         });

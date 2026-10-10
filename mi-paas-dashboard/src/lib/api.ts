@@ -11,6 +11,7 @@ export interface Deployment {
   commitHash?: string | null;
   commitMessage?: string | null;
   commitAuthor?: string | null;
+  serviceType?: "web" | "worker" | null;
   finishedAt?: string | null;
   trigger?: "manual" | "webhook" | null;
 }

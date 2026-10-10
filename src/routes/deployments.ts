@@ -38,6 +38,7 @@ function toResponse(record: DeploymentRecord) {
     commitHash: record.commitHash?.trim() || null,
     commitMessage: record.commitMessage?.trim() || null,
     commitAuthor: record.commitAuthor?.trim() || null,
+    serviceType: record.serviceType === "worker" ? "worker" : "web",
     finishedAt: record.finishedAt?.trim() || null,
     trigger: record.trigger === "webhook" ? "webhook" : record.trigger === "manual" ? "manual" : null,
   };
@@ -103,6 +104,7 @@ export async function deploymentRoutes(
                 name: true,
                 repoUrl: true,
                 branch: true,
+                serviceType: true,
               },
             },
           },
@@ -141,6 +143,7 @@ export async function deploymentRoutes(
           branch,
           commitHash,
           trigger: "manual",
+          serviceType: source.project.serviceType === "worker" ? "worker" : "web",
         });
 
         return reply.code(202).send({
