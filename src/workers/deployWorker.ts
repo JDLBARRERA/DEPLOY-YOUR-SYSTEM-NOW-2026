@@ -61,7 +61,7 @@ function hasPrismaSchema(dir: string): boolean {
   return repoFile(dir, path.join("prisma", "schema.prisma")) || repoFile(dir, "schema.prisma");
 }
 
-function nodeDockerfile(dir: string): string {
+function nodeDockerfile(dir: string, command: string): string {
   const prisma = hasPrismaSchema(dir)
     ? "# 1. Generar cliente de Prisma\nRUN npx prisma generate\n"
     : "";
@@ -76,7 +76,7 @@ RUN npm run build
 # 3. Copiar la carpeta generada a dist/ para runtime
 RUN cp -r src/generated dist/ || true
 EXPOSE 8000
-CMD ["npm", "start"]
+CMD ["sh", "-c", ${JSON.stringify(command)}]
 `;
 }
 
@@ -128,6 +128,75 @@ function renderStartCommand(dir: string): string | null {
     command = command.slice(1, -1);
   }
   return usableCommand(command);
+}
+
+function packageScripts(dir: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(readRepoText(dir, "package.json")) as {
+      scripts?: Record<string, unknown>;
+    };
+    const scripts: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed.scripts ?? {})) {
+      if (typeof value === "string" && value.trim()) {
+        scripts[key] = value.trim();
+      }
+    }
+    return scripts;
+  } catch {
+    return {};
+  }
+}
+
+function astroConfigText(dir: string): string {
+  return ["astro.config.mjs", "astro.config.js", "astro.config.ts", "astro.config.mts"]
+    .map((name) => readRepoText(dir, name))
+    .join("\n");
+}
+
+function nodeStartCommand(
+  dir: string,
+  options: { worker: boolean; startCommand?: string | null },
+): { command: string; source: string } | null {
+  if (options.worker) {
+    const fromProcfile = procfileCommand(dir, "worker");
+    if (fromProcfile) {
+      return { command: fromProcfile, source: "Procfile worker:" };
+    }
+  } else {
+    const fromProcfile = procfileCommand(dir, "web");
+    if (fromProcfile) {
+      return { command: fromProcfile, source: "Procfile" };
+    }
+  }
+  const configured = usableCommand(options.startCommand ?? "");
+  if (configured) {
+    return { command: configured, source: "startCommand del proyecto" };
+  }
+  const fromRender = renderStartCommand(dir);
+  if (fromRender) {
+    return { command: fromRender, source: "render.yaml" };
+  }
+  const scripts = packageScripts(dir);
+  if (scripts.start) {
+    return { command: "npm start", source: "package.json start" };
+  }
+  const astro = astroConfigText(dir);
+  if (astro.trim()) {
+    const needsDevServer =
+      astro.includes("configureServer") && !astro.includes("configurePreviewServer");
+    const mode = needsDevServer ? "dev" : "preview";
+    return {
+      command: `npx astro ${mode} --host 0.0.0.0 --port ${CONTAINER_INTERNAL_PORT}`,
+      source: needsDevServer ? "astro dev" : "astro preview",
+    };
+  }
+  if (scripts.preview) {
+    return { command: "npm run preview", source: "package.json preview" };
+  }
+  if (scripts.dev) {
+    return { command: "npm run dev", source: "package.json dev" };
+  }
+  return null;
 }
 
 function pythonStartCommand(
@@ -330,11 +399,18 @@ const worker = new Worker<DeployJobData>(
           `Dockerfile generado desde requirements.txt (Python). Comando desde ${start.source}: ${start.command}${ignored ? ". .dockerignore añadido." : ""}`,
         );
       } else if (repoFile(repoDir, "package.json")) {
+        const start = nodeStartCommand(repoDir, { worker: isWorker, startCommand });
+        if (!start) {
+          const missing =
+            "Falta comando de arranque: Procfile, startCommand, render.yaml o un script start/preview/dev en package.json";
+          await note(missing);
+          throw new Error(missing);
+        }
         const withPrisma = hasPrismaSchema(repoDir);
-        fs.writeFileSync(dockerfilePath, nodeDockerfile(repoDir));
+        fs.writeFileSync(dockerfilePath, nodeDockerfile(repoDir, start.command));
         const ignored = writeGeneratedDockerignore(repoDir);
         await note(
-          `Dockerfile generado desde package.json (Node.js${withPrisma ? ", con prisma generate" : ""})${ignored ? ". .dockerignore añadido." : ""}`,
+          `Dockerfile generado desde package.json (Node.js${withPrisma ? ", con prisma generate" : ""}). Comando desde ${start.source}: ${start.command}${ignored ? ". .dockerignore añadido." : ""}`,
         );
       } else {
         await note("Falta Dockerfile, package.json o requirements.txt");
