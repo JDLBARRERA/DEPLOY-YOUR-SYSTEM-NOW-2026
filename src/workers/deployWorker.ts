@@ -216,7 +216,7 @@ const worker = new Worker<DeployJobData>(
       let containerId: string;
       try {
         containerId = execSync(
-          `docker run -d --name "${containerName}" --network "${deployNetwork}" --memory=${limits.memory} --memory-swap=${limits.memory} --cpus=${limits.cpus} ${envFlags} "${appName}"`,
+          `docker run -d --name "${containerName}" --label paas.app="${appName}" --network "${deployNetwork}" --memory=${limits.memory} --memory-swap=${limits.memory} --cpus=${limits.cpus} ${envFlags} "${appName}"`,
           { stdio: "pipe" },
         )
           .toString()
@@ -268,6 +268,16 @@ const worker = new Worker<DeployJobData>(
         await note(
           `Contenedor saludable (${containerName}), pero el enrutamiento de Caddy falló: ${caddyMessage}`,
         );
+      }
+
+      if (routed) {
+        try {
+          await retirePreviousDeploys(appName, projectId, note);
+        } catch (error) {
+          await note(
+            `No se pudieron retirar los contenedores anteriores: ${commandError(error)}`,
+          );
+        }
       }
 
       await store.update(projectId, {
@@ -332,6 +342,93 @@ function repoDirectory(jobId: string | undefined): string {
     throw new Error("jobId inválido para la carpeta temporal");
   }
   return path.resolve(os.tmpdir(), "deployments", jobId);
+}
+
+const APP_CONTAINER_NAME = /^paas-([a-f0-9]{16})$/;
+
+async function retirePreviousDeploys(
+  appName: string,
+  currentProjectId: string,
+  note: (message: string) => Promise<void>,
+): Promise<void> {
+  const previous = new Set<string>();
+  for (const name of listPreviousContainers(appName, currentProjectId)) {
+    const match = APP_CONTAINER_NAME.exec(name);
+    if (match) {
+      previous.add(match[1]);
+    }
+  }
+
+  const records = await store.list();
+  for (const record of records) {
+    if (
+      record.image === appName &&
+      record.projectId !== currentProjectId &&
+      APP_CONTAINER_NAME.test(`paas-${record.projectId}`)
+    ) {
+      previous.add(record.projectId);
+    }
+  }
+
+  for (const previousId of previous) {
+    const name = `paas-${previousId}`;
+    try {
+      execSync(`docker stop "${name}"`, { stdio: "pipe" });
+    } catch {
+      // Ya estaba detenido o no existe.
+    }
+    try {
+      execSync(`docker rm "${name}"`, { stdio: "pipe" });
+    } catch {
+      // Ya no existe.
+    }
+    try {
+      await caddy.deleteRoute(previousId);
+    } catch (error) {
+      await note(
+        `No se pudo quitar la ruta anterior de ${name}: ${commandError(error)}`,
+      );
+    }
+    await store.update(previousId, { status: "replaced" });
+    await note(`Contenedor anterior ${name} detenido y eliminado`);
+  }
+
+  await caddy.ensureCatchAll();
+}
+
+function listPreviousContainers(appName: string, currentProjectId: string): string[] {
+  let listed = "";
+  try {
+    listed = execSync(`docker ps -a --format "{{.Names}}"`, {
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+  } catch {
+    return [];
+  }
+
+  const currentName = `paas-${currentProjectId}`;
+  const names: string[] = [];
+  for (const name of listed.split(/\s+/).filter(Boolean)) {
+    if (name === currentName || !APP_CONTAINER_NAME.test(name)) {
+      continue;
+    }
+    let inspected = "";
+    try {
+      inspected = execSync(
+        `docker inspect -f '{{.Config.Image}}|{{index .Config.Labels "paas.app"}}' "${name}"`,
+        { stdio: "pipe", encoding: "utf8" },
+      ).trim();
+    } catch {
+      continue;
+    }
+    const [image = "", label = ""] = inspected.split("|");
+    const imageName = image.split(":")[0];
+    if (label === appName || image === appName || imageName === appName) {
+      names.push(name);
+    }
+  }
+  return names;
 }
 
 function dockerTag(image: string, projectName: string): string {

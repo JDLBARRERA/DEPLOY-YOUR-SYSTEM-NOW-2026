@@ -8,7 +8,7 @@ import { DeployEngine, deploymentImageName } from "./DeployEngine.js";
 import type { DatabaseManagerService } from "./DatabaseManagerService.js";
 import type { DeploymentStore } from "./DeploymentStore.js";
 import type { LogBus } from "./LogBus.js";
-import { enqueueDeployment } from "./enqueueDeployment.js";
+import { DeployInProgressError, enqueueDeployment } from "./enqueueDeployment.js";
 
 export class WebhookSignatureError extends Error {
   constructor() {
@@ -223,14 +223,26 @@ export class GitHubWebhookService {
         },
       });
 
-      const queued = await enqueueDeployment(this.deps, {
-        repoUrl: target.cloneUrl,
-        projectName: project.name,
-        image,
-        deploymentId: deployment.id,
-        branch: target.branch,
-        env,
-      });
+      let queued: Awaited<ReturnType<typeof enqueueDeployment>>;
+      try {
+        queued = await enqueueDeployment(this.deps, {
+          repoUrl: target.cloneUrl,
+          projectName: project.name,
+          image,
+          deploymentId: deployment.id,
+          branch: target.branch,
+          env,
+        });
+      } catch (error) {
+        if (error instanceof DeployInProgressError) {
+          await prisma.deployment.update({
+            where: { id: deployment.id },
+            data: { status: "replaced" },
+          });
+          continue;
+        }
+        throw error;
+      }
       if (databaseWarning) {
         await this.deps.logs.append(queued.projectId, databaseWarning);
       }

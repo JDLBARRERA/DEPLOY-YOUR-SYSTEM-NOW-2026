@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { requireAdmin } from "../auth/requireAdmin.js";
 import { prisma } from "../db.js";
 import type { DeployJobData } from "../queues/deployQueue.js";
-import { enqueueDeployment } from "../services/enqueueDeployment.js";
+import { DeployInProgressError, enqueueDeployment } from "../services/enqueueDeployment.js";
 import {
   assertGitBranch,
   assertGitCommit,
@@ -109,6 +109,9 @@ export async function deployRoutes(
           status: "queued",
         });
       } catch (error) {
+        if (error instanceof DeployInProgressError) {
+          return reply.code(409).send({ error: error.message });
+        }
         if (error instanceof DeployValidationError) {
           return reply.code(400).send({ error: error.message });
         }

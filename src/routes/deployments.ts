@@ -11,7 +11,7 @@ import {
   DeployValidationError,
   normalizeImageName,
 } from "../services/DeployEngine.js";
-import { enqueueDeployment } from "../services/enqueueDeployment.js";
+import { DeployInProgressError, enqueueDeployment } from "../services/enqueueDeployment.js";
 import type { LogBus } from "../services/LogBus.js";
 
 const CONTAINER_PORT = "3000";
@@ -144,6 +144,9 @@ export async function deploymentRoutes(
           status: "queued",
         });
       } catch (error) {
+        if (error instanceof DeployInProgressError) {
+          return reply.code(409).send({ error: error.message });
+        }
         if (error instanceof DeployValidationError) {
           return reply.code(400).send({ error: error.message });
         }
