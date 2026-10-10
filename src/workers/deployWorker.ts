@@ -627,6 +627,10 @@ function resolveDeployNetwork(): string {
     return fromEnv;
   }
 
+  if (dockerNetworkExists("paas")) {
+    return "paas";
+  }
+
   for (const container of ["mi-paas-caddy-1", "caddy", "paas-caddy-1"]) {
     try {
       const networks = execSync(
@@ -645,6 +649,15 @@ function resolveDeployNetwork(): string {
   }
 
   return "mi-paas_default";
+}
+
+function dockerNetworkExists(name: string): boolean {
+  try {
+    execSync(`docker network inspect "${name}"`, { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function ensureCaddyOnNetwork(network: string): Promise<void> {
