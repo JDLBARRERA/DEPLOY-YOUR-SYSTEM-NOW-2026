@@ -9,6 +9,11 @@ const VISIBLE_PX = 48;
 
 type DragPlace = { x: number; y: number; width: number };
 
+function restoreDocument() {
+  document.body.style.overflow = "";
+  document.body.style.userSelect = "";
+}
+
 function clampPlace(x: number, y: number, width: number): { x: number; y: number } {
   const maxX = window.innerWidth - VISIBLE_PX;
   const minX = VISIBLE_PX - width;
@@ -47,13 +52,23 @@ export function AeroWindow({
       setPlace({ x: next.x, y: next.y, width: current.width });
     }
     function onUp() {
+      if (!drag.current) return;
       drag.current = null;
+      restoreDocument();
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("blur", onUp);
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("blur", onUp);
+      drag.current = null;
+      restoreDocument();
     };
   }, []);
 
@@ -71,6 +86,7 @@ export function AeroWindow({
     };
     const next = clampPlace(rect.left, rect.top, rect.width);
     setPlace({ x: next.x, y: next.y, width: rect.width });
+    document.body.style.userSelect = "none";
     event.preventDefault();
   }
 
@@ -96,7 +112,15 @@ export function AeroWindow({
       className={`${frame} flex flex-col overflow-hidden rounded-xl border border-white/40 bg-white/20 shadow-2xl backdrop-blur-lg`}
       style={
         place && !maximized
-          ? { position: "fixed", left: place.x, top: place.y, width: place.width, zIndex: 30, marginTop: 0 }
+          ? {
+              position: "fixed",
+              left: place.x,
+              top: place.y,
+              width: place.width,
+              maxHeight: `calc(100svh - ${place.y + TASKBAR_PX}px)`,
+              zIndex: 30,
+              marginTop: 0,
+            }
           : undefined
       }
     >
@@ -127,7 +151,7 @@ export function AeroWindow({
         </span>
       </header>
       {minimized ? null : (
-        <div className="m-2 overflow-auto rounded-lg border border-white/40 bg-white/70 p-4 text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+        <div className="m-2 min-h-0 flex-1 overflow-auto rounded-lg border border-white/40 bg-white/70 p-4 text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
           {children}
         </div>
       )}

@@ -28,7 +28,7 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
   const title = titles[pathname] ?? "deplowe-now.com";
 
   return (
-    <div className="relative min-h-svh overflow-hidden bg-[#041428] text-white">
+    <div className="relative h-svh overflow-y-auto bg-[#041428] text-white">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_20%_0%,#b8ffd9_0%,transparent_42%),radial-gradient(ellipse_at_70%_20%,#3ee0ff_0%,transparent_36%),radial-gradient(ellipse_at_40%_80%,#1a5cff_0%,transparent_45%),radial-gradient(ellipse_at_90%_90%,#06204a_0%,#020814_70%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(160deg,transparent_0%,rgba(0,40,80,0.25)_45%,rgba(0,0,0,0.35)_100%)]" />
 
@@ -64,8 +64,8 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
         })}
       </nav>
 
-      <div className="relative z-10 flex min-h-svh justify-center px-4 pt-6 pb-20 pl-28">
-        {children}
+      <div className="absolute inset-0 z-10 overflow-y-auto px-4 pt-6 pb-20 pl-28">
+        <div className="flex min-h-full justify-center">{children}</div>
       </div>
 
       {startOpen ? (
