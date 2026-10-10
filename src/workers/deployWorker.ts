@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { exec, execSync } from "node:child_process";
+import { exec, execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -139,12 +139,16 @@ function pythonStartCommand(dir: string): { command: string; source: string } | 
   return null;
 }
 
-function pythonDockerfile(command: string): string {
+function pythonDockerfile(command: string, pipCache: boolean): string {
+  const install = pipCache
+    ? "RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt"
+    : "RUN pip install --no-cache-dir -r requirements.txt";
   return [
+    ...(pipCache ? ["# syntax=docker/dockerfile:1"] : []),
     "FROM python:3.11-slim",
     "WORKDIR /app",
     "COPY requirements.txt .",
-    "RUN pip install --no-cache-dir -r requirements.txt",
+    install,
     "COPY . .",
     "EXPOSE 8000",
     `CMD sh -c ${shellSingleQuote(command)}`,
@@ -182,12 +186,22 @@ const worker = new Worker<DeployJobData>(
     const containerName = `paas-${projectId}`;
     const lines: string[] = [];
     const repoDir = repoDirectory(job.id);
+    const startedAt = new Date();
     let cloned = false;
 
     const note = async (message: string) => {
       console.log(message);
       lines.push(message);
       await logs.append(projectId, message);
+    };
+
+    const recordDuration = async () => {
+      const durationSeconds = Math.max(0, Math.round((Date.now() - startedAt.getTime()) / 1000));
+      await syncDeployment(deploymentId, {
+        durationSeconds,
+        startedAt,
+        stoppedAt: new Date(),
+      });
     };
 
     await store.update(projectId, { status: "building" });
@@ -233,9 +247,32 @@ const worker = new Worker<DeployJobData>(
         encoding: "utf8",
         stdio: "pipe",
       }).trim();
-      await syncDeployment(deploymentId, { commitHash: head, branch });
+      const meta = execSync("git log -1 --pretty=format:%h%x09%s%x09%an", {
+        cwd: repoDir,
+        encoding: "utf8",
+        stdio: "pipe",
+      }).trim();
+      const [shortHash = "", subject = "", author = ""] = meta.split("\t");
+      const commitLabel = [
+        shortHash || head.slice(0, 7),
+        subject ? `- ${subject}` : "",
+        author ? `(${author})` : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      await note(`Commit ${commitLabel}`);
+      await syncDeployment(deploymentId, {
+        commitHash: head,
+        commitMessage: subject || null,
+        commitAuthor: author || null,
+        branch,
+      });
       if (/^[a-f0-9]{7,40}$/i.test(head)) {
-        await store.update(projectId, { commitHash: head });
+        await store.update(projectId, {
+          commitHash: head,
+          ...(subject ? { commitMessage: subject } : {}),
+          ...(author ? { commitAuthor: author } : {}),
+        });
       }
 
       console.log("Directorio del repo:", repoDir);
@@ -260,7 +297,7 @@ const worker = new Worker<DeployJobData>(
           );
         }
         pythonRuntime = true;
-        fs.writeFileSync(dockerfilePath, pythonDockerfile(start.command));
+        fs.writeFileSync(dockerfilePath, pythonDockerfile(start.command, !clearCache));
         const ignored = writeGeneratedDockerignore(repoDir);
         await note(
           `Dockerfile generado desde requirements.txt (Python). Comando desde ${start.source}: ${start.command}${ignored ? ". .dockerignore añadido." : ""}`,
@@ -289,6 +326,7 @@ const worker = new Worker<DeployJobData>(
       try {
         await execAsync(buildCmd, {
           cwd: repoDir,
+          env: { ...process.env, DOCKER_BUILDKIT: "1" },
           maxBuffer: 32 * 1024 * 1024,
         });
       } catch (buildError) {
@@ -383,11 +421,18 @@ const worker = new Worker<DeployJobData>(
         throw new Error(redactEnvValues(redactSecrets(commandError(runError)), runtimeEnv));
       }
 
-      const paused = await pausePreviousContainers(appName, projectId, note);
-      await note(
-        `Health check: HTTP HEAD :${CONTAINER_INTERNAL_PORT} cada ${HEALTH_INTERVAL_MS / 1000}s durante hasta ${HEALTH_TIMEOUT_MS / 1000}s, sin reinicios...`,
-      );
-      const health = await checkContainerHealth(containerId, deployNetwork, note);
+      const stopAppLogs = followContainerLogs(containerId, note);
+      let paused: string[] = [];
+      let health: { ok: true } | { ok: false; reason: string };
+      try {
+        paused = await pausePreviousContainers(appName, projectId, note);
+        await note(
+          `Health check: HTTP HEAD :${CONTAINER_INTERNAL_PORT} cada ${HEALTH_INTERVAL_MS / 1000}s durante hasta ${HEALTH_TIMEOUT_MS / 1000}s, sin reinicios...`,
+        );
+        health = await checkContainerHealth(containerId, deployNetwork, note);
+      } finally {
+        stopAppLogs();
+      }
       if (!health.ok) {
         const dockerLogs = readDockerLogs(containerId);
         const failure = [
@@ -449,6 +494,7 @@ const worker = new Worker<DeployJobData>(
         await resumeContainers(paused, note);
       }
 
+      await recordDuration();
       await finishDeployRecord(projectId, {
         status: "running",
         image: appName,
@@ -472,6 +518,7 @@ const worker = new Worker<DeployJobData>(
       lines.push(message);
       await logs.append(projectId, message);
       await finishDeployRecord(projectId, { status: "failed" });
+      await recordDuration();
       await syncDeployment(deploymentId, {
         status: "failed",
         buildLogs: lines.join("\n"),
@@ -513,6 +560,59 @@ function repoDirectory(jobId: string | undefined): string {
 }
 
 const APP_CONTAINER_NAME = /^paas-([a-f0-9]{16})$/;
+
+function followContainerLogs(
+  containerId: string,
+  note: (message: string) => Promise<void>,
+): () => void {
+  if (!/^[a-f0-9]{12,64}$/i.test(containerId)) {
+    return () => undefined;
+  }
+  const child = spawn("docker", ["logs", "-f", containerId], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let buffer = "";
+  const pending: string[] = [];
+  let writing = false;
+
+  const flush = () => {
+    if (writing) return;
+    writing = true;
+    const drain = async () => {
+      while (pending.length > 0) {
+        const line = pending.shift();
+        if (!line) continue;
+        await note(redactLogLine(line));
+      }
+      writing = false;
+      if (pending.length > 0) flush();
+    };
+    void drain();
+  };
+
+  const push = (chunk: Buffer | string) => {
+    buffer += chunk.toString();
+    const parts = buffer.split(/\r?\n/);
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const line = part.trim();
+      if (line) pending.push(line);
+    }
+    flush();
+  };
+
+  child.stdout?.on("data", push);
+  child.stderr?.on("data", push);
+  return () => {
+    child.kill();
+  };
+}
+
+function redactLogLine(line: string): string {
+  return line.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, (url) =>
+    url.includes("@") ? "[url-redacted]" : url,
+  );
+}
 
 function discardNewContainer(name: string): void {
   if (!APP_CONTAINER_NAME.test(name)) {

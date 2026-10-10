@@ -9,6 +9,8 @@ export interface Deployment {
   url?: string;
   createdAt: string;
   commitHash?: string | null;
+  commitMessage?: string | null;
+  commitAuthor?: string | null;
   finishedAt?: string | null;
   trigger?: "manual" | "webhook" | null;
 }

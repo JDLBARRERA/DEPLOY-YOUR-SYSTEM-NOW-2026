@@ -10,6 +10,8 @@ export interface DeploymentRecord {
   host: string;
   createdAt: string;
   commitHash?: string;
+  commitMessage?: string;
+  commitAuthor?: string;
   finishedAt?: string;
   trigger?: "manual" | "webhook";
 }

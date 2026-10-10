@@ -157,6 +157,7 @@ model Deployment {
   branch             String?
   startedAt          DateTime?
   stoppedAt          DateTime?
+  durationSeconds    Int?
   createdAt     DateTime       @default(now())
 }
 

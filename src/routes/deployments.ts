@@ -35,6 +35,11 @@ function toResponse(record: DeploymentRecord) {
     host: record.host,
     url: publicUrlForHost(record.host),
     createdAt: record.createdAt,
+    commitHash: record.commitHash?.trim() || null,
+    commitMessage: record.commitMessage?.trim() || null,
+    commitAuthor: record.commitAuthor?.trim() || null,
+    finishedAt: record.finishedAt?.trim() || null,
+    trigger: record.trigger === "webhook" ? "webhook" : record.trigger === "manual" ? "manual" : null,
   };
 }
 
@@ -135,6 +140,7 @@ export async function deploymentRoutes(
           deploymentId: redeploy.id,
           branch,
           commitHash,
+          trigger: "manual",
         });
 
         return reply.code(202).send({

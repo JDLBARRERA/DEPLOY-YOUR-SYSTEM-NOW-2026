@@ -414,6 +414,13 @@ function BuildLogs({ deployment }: { deployment: Deployment }) {
   }
 
   const commit = current.commitHash?.trim() ?? "";
+  const subject = current.commitMessage?.trim() ?? "";
+  const author = current.commitAuthor?.trim() ?? "";
+  const commitLabel = commit
+    ? [commit.slice(0, 7), subject ? `- ${subject}` : "", author ? `(${author})` : ""]
+        .filter(Boolean)
+        .join(" ")
+    : "No disponible";
 
   return (
     <div className="flex flex-col gap-2">
@@ -431,7 +438,7 @@ function BuildLogs({ deployment }: { deployment: Deployment }) {
         <span>
           Commit{" "}
           <span className="font-mono" title={commit || undefined}>
-            {commit ? commit.slice(0, 7) : "No disponible"}
+            {commitLabel}
           </span>
         </span>
         <span>Disparador {triggerLabel(current.trigger)}</span>
