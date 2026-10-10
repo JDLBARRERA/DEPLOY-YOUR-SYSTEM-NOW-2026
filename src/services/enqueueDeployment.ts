@@ -21,6 +21,7 @@ export interface EnqueueDeployInput {
   commitHash?: string;
   clearCache?: boolean;
   env?: Record<string, string>;
+  trigger?: "manual" | "webhook";
 }
 
 export async function enqueueDeployment(
@@ -44,6 +45,8 @@ export async function enqueueDeployment(
     status: "queued",
     host,
     createdAt: new Date().toISOString(),
+    trigger: input.trigger ?? "manual",
+    ...(input.commitHash ? { commitHash: input.commitHash } : {}),
   });
   await deps.logs.append(projectId, `Queued deploy of ${input.image}`);
 
