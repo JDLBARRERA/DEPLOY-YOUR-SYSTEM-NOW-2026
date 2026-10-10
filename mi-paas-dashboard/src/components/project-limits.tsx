@@ -177,6 +177,7 @@ export function ProjectLimitsCard() {
                   </button>
                 </div>
               </div>
+              <ProjectUsage projectId={project.id} />
             {openId === project.id ? (
             <>
             <form
@@ -275,6 +276,107 @@ export function ProjectLimitsCard() {
       )}
     </section>
   );
+}
+
+interface ProjectMetrics {
+  active: boolean;
+  cpu: number;
+  ramUsed: number;
+  ramLimit: number;
+  net: string;
+  disk: string;
+}
+
+const INACTIVE_METRICS: ProjectMetrics = {
+  active: false,
+  cpu: 0,
+  ramUsed: 0,
+  ramLimit: 0,
+  net: "0B / 0B",
+  disk: "0B / 0B",
+};
+
+function ProjectUsage({ projectId }: { projectId: string }) {
+  const [metrics, setMetrics] = useState<ProjectMetrics>(INACTIVE_METRICS);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      void apiFetch<ProjectMetrics>(`/projects/${encodeURIComponent(projectId)}/metrics`)
+        .then((next) => {
+          if (!cancelled) setMetrics(next);
+        })
+        .catch(() => {
+          if (!cancelled) setMetrics(INACTIVE_METRICS);
+        });
+    };
+    load();
+    const timer = window.setInterval(load, 7000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [projectId]);
+
+  const ramPercent =
+    metrics.ramLimit > 0 ? Math.min(100, (metrics.ramUsed / metrics.ramLimit) * 100) : 0;
+
+  return (
+    <div className="mt-3 border-t border-sky-100 pt-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold text-sky-950">Consumo de recursos</h3>
+        <span className="text-[11px] text-slate-500">{metrics.active ? "En marcha" : "Inactivo"}</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        <UsageBar label="CPU" percent={metrics.cpu} detail={`${metrics.cpu.toFixed(1)}%`} />
+        <UsageBar
+          label="RAM"
+          percent={ramPercent}
+          detail={`${formatBytes(metrics.ramUsed)} / ${formatBytes(metrics.ramLimit)}`}
+        />
+        <p className="text-[11px] text-slate-600">Red: {metrics.net}</p>
+        <p className="text-[11px] text-slate-600">Disco: {metrics.disk}</p>
+      </div>
+    </div>
+  );
+}
+
+function UsageBar({
+  label,
+  percent,
+  detail,
+}: {
+  label: string;
+  percent: number;
+  detail: string;
+}) {
+  const width = Math.max(0, Math.min(100, percent));
+  return (
+    <div>
+      <div className="mb-0.5 flex justify-between gap-2 text-[11px] text-slate-700">
+        <span>{label}</span>
+        <span className="font-mono">{detail}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+        <div className="h-full rounded-full bg-sky-600" style={{ width: `${width}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  const digits = value >= 10 || index === 0 ? 0 : 1;
+  return `${value.toFixed(digits)} ${units[index]}`;
 }
 
 function memoryOptions(current: string): string[] {

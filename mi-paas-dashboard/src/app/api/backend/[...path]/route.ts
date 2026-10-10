@@ -106,6 +106,13 @@ async function localFallback(
     });
   }
 
+  if (method === "GET" && head === "projects" && id && action === "metrics" && !segments[3]) {
+    return NextResponse.json(
+      { active: false, cpu: 0, ramUsed: 0, ramLimit: 0, net: "0B / 0B", disk: "0B / 0B" },
+      { headers: { "x-dn-mode": "local" } },
+    );
+  }
+
   if (method === "GET" && head === "projects" && !id) {
     return NextResponse.json(listProjects(), {
       headers: { "x-dn-mode": "local" },

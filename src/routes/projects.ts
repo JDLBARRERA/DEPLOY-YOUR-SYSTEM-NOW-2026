@@ -1,4 +1,5 @@
-import { execSync } from "node:child_process";
+import { exec, execSync } from "node:child_process";
+import { promisify } from "node:util";
 import type { FastifyInstance } from "fastify";
 import { requireAdmin } from "../auth/requireAdmin.js";
 import { prisma } from "../db.js";
@@ -19,8 +20,23 @@ import {
   DatabaseAddonService,
   type AddonType,
 } from "../services/DatabaseAddonService.js";
+import { stopRunningDeployments } from "../services/deploymentLifetime.js";
 
+const execAsync = promisify(exec);
 const MEMORY_LIMIT = /^(\d+(?:\.\d+)?)\s*(b|k|kb|m|mb|g|gb)$/i;
+const APP_CONTAINER_REF = /^paas-[a-f0-9]{16}$/;
+const DOCKER_ID_REF = /^[a-f0-9]{12,64}$/;
+const STATS_FORMAT =
+  `'{"cpu":"{{.CPUPerc}}","ram":"{{.MemUsage}}","net":"{{.NetIO}}","disk":"{{.BlockIO}}"}'`;
+
+interface ProjectMetrics {
+  active: boolean;
+  cpu: number;
+  ramUsed: number;
+  ramLimit: number;
+  net: string;
+  disk: string;
+}
 
 const updateSchema = {
   type: "object",
@@ -71,6 +87,129 @@ function prismaCode(error: unknown): string | null {
 }
 
 const APP_CONTAINER_NAME = /^paas-([a-f0-9]{16})$/;
+
+function inactiveMetrics(): ProjectMetrics {
+  return { active: false, cpu: 0, ramUsed: 0, ramLimit: 0, net: "0B / 0B", disk: "0B / 0B" };
+}
+
+async function activeContainer(projectId: string, projectName: string): Promise<string | null> {
+  const deployment = await prisma.deployment.findFirst({
+    where: { projectId, status: "running", containerId: { not: null } },
+    orderBy: { createdAt: "desc" },
+    select: { containerId: true },
+  });
+  const containerId = deployment?.containerId?.trim() ?? "";
+  if (DOCKER_ID_REF.test(containerId) && (await containerIsRunning(containerId))) {
+    return containerId;
+  }
+  let image = "";
+  try {
+    image = normalizeImageName(projectName);
+  } catch {
+    return null;
+  }
+  return runningContainerForImage(image);
+}
+
+async function containerIsRunning(ref: string): Promise<boolean> {
+  try {
+    const { stdout } = await execAsync(`docker inspect -f "{{.State.Running}}" "${ref}"`, {
+      timeout: 3000,
+    });
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+function runningContainerForImage(image: string): string | null {
+  if (!/^[a-z0-9][a-z0-9._-]{0,127}$/.test(image)) {
+    return null;
+  }
+  let listed = "";
+  try {
+    listed = execSync(`docker ps --filter status=running --format "{{.Names}}"`, {
+      stdio: "pipe",
+      encoding: "utf8",
+      timeout: 3000,
+    });
+  } catch {
+    return null;
+  }
+  for (const name of listed.split(/\s+/).filter(Boolean)) {
+    if (!APP_CONTAINER_REF.test(name)) {
+      continue;
+    }
+    let inspected = "";
+    try {
+      inspected = execSync(
+        `docker inspect -f '{{.Config.Image}}|{{index .Config.Labels "paas.app"}}' "${name}"`,
+        { stdio: "pipe", encoding: "utf8", timeout: 3000 },
+      ).trim();
+    } catch {
+      continue;
+    }
+    const [configured = "", label = ""] = inspected.split("|");
+    if (label === image || configured === image || configured.split(":")[0] === image) {
+      return name;
+    }
+  }
+  return null;
+}
+
+async function readDockerStats(ref: string): Promise<ProjectMetrics> {
+  if (!APP_CONTAINER_REF.test(ref) && !DOCKER_ID_REF.test(ref)) {
+    return inactiveMetrics();
+  }
+  const { stdout } = await execAsync(
+    `docker stats --no-stream --format ${STATS_FORMAT} "${ref}"`,
+    { timeout: 3000 },
+  );
+  const parsed = JSON.parse(stdout.trim()) as {
+    cpu?: string;
+    ram?: string;
+    net?: string;
+    disk?: string;
+  };
+  const ram = (parsed.ram ?? "").split("/").map((part) => part.trim());
+  return {
+    active: true,
+    cpu: parsePercent(parsed.cpu ?? ""),
+    ramUsed: parseByteToken(ram[0] ?? ""),
+    ramLimit: parseByteToken(ram[1] ?? ""),
+    net: parsed.net?.trim() || "0B / 0B",
+    disk: parsed.disk?.trim() || "0B / 0B",
+  };
+}
+
+function parsePercent(value: string): number {
+  const amount = Number.parseFloat(value.replace("%", "").trim());
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function parseByteToken(value: string): number {
+  const match = /^([\d.]+)\s*([a-z]+)?$/i.exec(value.trim());
+  if (!match) {
+    return 0;
+  }
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) {
+    return 0;
+  }
+  const unit = (match[2] ?? "b").toLowerCase();
+  const powers: Record<string, number> = {
+    b: 1,
+    kb: 1000,
+    mb: 1000 ** 2,
+    gb: 1000 ** 3,
+    tb: 1000 ** 4,
+    kib: 1024,
+    mib: 1024 ** 2,
+    gib: 1024 ** 3,
+    tib: 1024 ** 4,
+  };
+  return Math.round(amount * (powers[unit] ?? 1));
+}
 
 async function retireProjectApps(projectName: string, store?: DeploymentStore): Promise<void> {
   let image: string;
@@ -315,6 +454,7 @@ export async function projectRoutes(
       }
 
       try {
+        await stopRunningDeployments(project.id);
         await prisma.deployment.deleteMany({ where: { projectId: project.id } });
         await prisma.project.delete({ where: { id: project.id } });
         return { ok: true };
@@ -324,6 +464,29 @@ export async function projectRoutes(
         }
         request.log.error(error);
         return reply.code(500).send({ error: "No se pudo eliminar el proyecto" });
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/projects/:id/metrics",
+    { preValidation: requireAdmin },
+    async (request, reply) => {
+      const project = await prisma.project.findUnique({
+        where: { id: request.params.id },
+        select: { id: true, name: true },
+      });
+      if (!project) {
+        return reply.code(404).send({ error: "Proyecto no encontrado" });
+      }
+      const ref = await activeContainer(project.id, project.name);
+      if (!ref) {
+        return inactiveMetrics();
+      }
+      try {
+        return await readDockerStats(ref);
+      } catch {
+        return inactiveMetrics();
       }
     },
   );
