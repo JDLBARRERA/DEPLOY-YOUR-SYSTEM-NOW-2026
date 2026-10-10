@@ -8,6 +8,9 @@ export interface Deployment {
   host?: string;
   url?: string;
   createdAt: string;
+  commitHash?: string | null;
+  finishedAt?: string | null;
+  trigger?: "manual" | "webhook" | null;
 }
 
 export type DatabaseEngine = "postgres" | "mysql" | "redis";
