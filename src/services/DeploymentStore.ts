@@ -9,6 +9,9 @@ export interface DeploymentRecord {
   status: string;
   host: string;
   createdAt: string;
+  commitHash?: string;
+  finishedAt?: string;
+  trigger?: "manual" | "webhook";
 }
 
 const INDEX_KEY = "deploy:projects";

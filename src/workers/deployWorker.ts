@@ -26,6 +26,7 @@ import {
   redactEnvValues,
 } from "../services/projectEnv.js";
 import { createRedis } from "../redis.js";
+import { markDeploymentRunning } from "../services/deploymentLifetime.js";
 import { syncDeployment } from "../services/syncDeployment.js";
 
 const execAsync = promisify(exec);
@@ -37,6 +38,17 @@ const concurrency = Number(process.env.DEPLOY_CONCURRENCY ?? 5);
 const HEALTH_TIMEOUT_MS = 15_000;
 const HEALTH_INTERVAL_MS = 2_000;
 const LOCK_DURATION_MS = 300_000;
+
+async function finishDeployRecord(
+  projectId: string,
+  patch: { status: string; image?: string; port?: string; host?: string },
+): Promise<void> {
+  const current = await store.get(projectId);
+  await store.update(projectId, {
+    ...patch,
+    ...(current?.finishedAt ? {} : { finishedAt: new Date().toISOString() }),
+  });
+}
 const CONTAINER_INTERNAL_PORT = 8000;
 const DEFAULT_RUNTIME_DATABASE_URL =
   process.env.DEPLOY_DEFAULT_DATABASE_URL?.trim() ||
@@ -59,6 +71,38 @@ RUN cp -r src/generated dist/ || true
 EXPOSE 8000
 CMD ["npm", "start"]
 `;
+
+const PYTHON_DOCKERFILE = `FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 8000
+CMD sh -c 'if [ -n "\$START_COMMAND" ]; then exec sh -c "\$START_COMMAND"; elif [ -f main.py ]; then exec python main.py; elif [ -f app.py ]; then exec python app.py; else exec uvicorn main:app --host 0.0.0.0 --port 8000; fi'
+`;
+
+function repoFile(dir: string, name: string): boolean {
+  return fs.existsSync(path.join(dir, name));
+}
+
+const GENERATED_DOCKERIGNORE = [
+  ".git",
+  "node_modules",
+  "venv",
+  ".venv",
+  "__pycache__",
+  ".next",
+  "dist",
+].join("\n");
+
+function writeGeneratedDockerignore(dir: string): boolean {
+  const ignorePath = path.join(dir, ".dockerignore");
+  if (fs.existsSync(ignorePath)) {
+    return false;
+  }
+  fs.writeFileSync(ignorePath, `${GENERATED_DOCKERIGNORE}\n`);
+  return true;
+}
 
 const worker = new Worker<DeployJobData>(
   DEPLOY_QUEUE_NAME,
@@ -123,14 +167,39 @@ const worker = new Worker<DeployJobData>(
         stdio: "pipe",
       }).trim();
       await syncDeployment(deploymentId, { commitHash: head, branch });
+      if (/^[a-f0-9]{7,40}$/i.test(head)) {
+        await store.update(projectId, { commitHash: head });
+      }
 
       console.log("Directorio del repo:", repoDir);
       const dockerfilePath = path.join(repoDir, "Dockerfile");
-      if (!fs.existsSync(dockerfilePath)) {
+      const hasDockerfile = repoFile(repoDir, "Dockerfile");
+      const hasCompose = repoFile(repoDir, "docker-compose.yml") || repoFile(repoDir, "docker-compose.yaml");
+      if (hasDockerfile || hasCompose) {
+        if (!hasDockerfile) {
+          await note("El repositorio trae docker-compose y no tiene Dockerfile. No se genera uno.");
+          throw new Error("El repositorio trae docker-compose y no tiene Dockerfile");
+        }
+        await note("Usando el Dockerfile del repositorio");
+      } else if (repoFile(repoDir, "requirements.txt")) {
+        fs.writeFileSync(dockerfilePath, PYTHON_DOCKERFILE);
+        const ignored = writeGeneratedDockerignore(repoDir);
+        await note(
+          ignored
+            ? "Dockerfile generado desde requirements.txt (Python). .dockerignore añadido."
+            : "Dockerfile generado desde requirements.txt (Python)",
+        );
+      } else if (repoFile(repoDir, "package.json")) {
         fs.writeFileSync(dockerfilePath, DEFAULT_DOCKERFILE);
-        console.log("Dockerfile autogenerado en:", dockerfilePath);
-        await logs.append(projectId, `Dockerfile autogenerado en: ${dockerfilePath}`);
-        lines.push(`Dockerfile autogenerado en: ${dockerfilePath}`);
+        const ignored = writeGeneratedDockerignore(repoDir);
+        await note(
+          ignored
+            ? "Dockerfile generado desde package.json (Node.js). .dockerignore añadido."
+            : "Dockerfile generado desde package.json (Node.js)",
+        );
+      } else {
+        await note("Falta Dockerfile, package.json o requirements.txt");
+        throw new Error("Falta Dockerfile, package.json o requirements.txt");
       }
 
       const buildCmd = clearCache
@@ -148,7 +217,7 @@ const worker = new Worker<DeployJobData>(
         });
       } catch (buildError) {
         const detail = commandError(buildError);
-        await note(`docker build falló (incluye npm run build):\n${detail}`);
+        await note(`docker build falló:\n${detail}`);
         throw buildError;
       }
 
@@ -216,7 +285,7 @@ const worker = new Worker<DeployJobData>(
       let containerId: string;
       try {
         containerId = execSync(
-          `docker run -d --name "${containerName}" --label paas.app="${appName}" --network "${deployNetwork}" --memory=${limits.memory} --memory-swap=${limits.memory} --cpus=${limits.cpus} ${envFlags} "${appName}"`,
+          `docker run -d --name "${containerName}" --label paas.app="${appName}" --network "${deployNetwork}" --memory=${limits.memory} --memory-swap=${limits.memory} --cpus=${limits.cpus} --pids-limit=100 --restart=always ${envFlags} "${appName}"`,
           { stdio: "pipe" },
         )
           .toString()
@@ -237,8 +306,11 @@ const worker = new Worker<DeployJobData>(
         ]
           .filter(Boolean)
           .join("\n");
-        await note(failure);
-        await store.update(projectId, {
+        discardNewContainer(containerName);
+        await note(
+          `${failure}\nContenedor nuevo ${containerName} eliminado. El contenedor anterior sigue activo.`,
+        );
+        await finishDeployRecord(projectId, {
           status: "failed",
           image: appName,
           port: String(CONTAINER_INTERNAL_PORT),
@@ -280,14 +352,13 @@ const worker = new Worker<DeployJobData>(
         }
       }
 
-      await store.update(projectId, {
+      await finishDeployRecord(projectId, {
         status: "running",
         image: appName,
         port: String(CONTAINER_INTERNAL_PORT),
         host,
       });
-      await syncDeployment(deploymentId, {
-        status: "running",
+      await markDeploymentRunning(deploymentId, {
         port: CONTAINER_INTERNAL_PORT,
         url: appPublicUrl(appName),
         containerId,
@@ -303,7 +374,7 @@ const worker = new Worker<DeployJobData>(
       console.error(message);
       lines.push(message);
       await logs.append(projectId, message);
-      await store.update(projectId, { status: "failed" });
+      await finishDeployRecord(projectId, { status: "failed" });
       await syncDeployment(deploymentId, {
         status: "failed",
         buildLogs: lines.join("\n"),
@@ -345,6 +416,17 @@ function repoDirectory(jobId: string | undefined): string {
 }
 
 const APP_CONTAINER_NAME = /^paas-([a-f0-9]{16})$/;
+
+function discardNewContainer(name: string): void {
+  if (!APP_CONTAINER_NAME.test(name)) {
+    return;
+  }
+  try {
+    execSync(`docker rm -f "${name}"`, { stdio: "pipe" });
+  } catch {
+    // El contenedor nuevo ya no está.
+  }
+}
 
 async function retirePreviousDeploys(
   appName: string,
