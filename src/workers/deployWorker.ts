@@ -383,6 +383,7 @@ const worker = new Worker<DeployJobData>(
         throw new Error(redactEnvValues(redactSecrets(commandError(runError)), runtimeEnv));
       }
 
+      const paused = await pausePreviousContainers(appName, projectId, note);
       await note(
         `Health check: HTTP HEAD :${CONTAINER_INTERNAL_PORT} cada ${HEALTH_INTERVAL_MS / 1000}s durante hasta ${HEALTH_TIMEOUT_MS / 1000}s, sin reinicios...`,
       );
@@ -395,9 +396,14 @@ const worker = new Worker<DeployJobData>(
         ]
           .filter(Boolean)
           .join("\n");
+        await resumeContainers(paused, note);
         discardNewContainer(containerName);
         await note(
-          `${failure}\nContenedor nuevo ${containerName} eliminado. El contenedor anterior sigue activo.`,
+          `${failure}\nContenedor nuevo ${containerName} eliminado. ${
+            paused.length > 0
+              ? "El contenedor anterior fue reanudado."
+              : "No había un contenedor anterior que reanudar."
+          }`,
         );
         await finishDeployRecord(projectId, {
           status: "failed",
@@ -433,12 +439,14 @@ const worker = new Worker<DeployJobData>(
 
       if (routed) {
         try {
-          await retirePreviousDeploys(appName, projectId, note);
+          await retirePreviousDeploys(appName, projectId, note, paused);
         } catch (error) {
           await note(
             `No se pudieron retirar los contenedores anteriores: ${commandError(error)}`,
           );
         }
+      } else {
+        await resumeContainers(paused, note);
       }
 
       await finishDeployRecord(projectId, {
@@ -517,12 +525,54 @@ function discardNewContainer(name: string): void {
   }
 }
 
+async function pausePreviousContainers(
+  appName: string,
+  currentProjectId: string,
+  note: (message: string) => Promise<void>,
+): Promise<string[]> {
+  const paused: string[] = [];
+  for (const name of listPreviousContainers(appName, currentProjectId)) {
+    if (!APP_CONTAINER_NAME.test(name)) {
+      continue;
+    }
+    try {
+      execSync(`docker stop "${name}"`, { stdio: "pipe" });
+      paused.push(name);
+      await note(`Contenedor anterior ${name} pausado`);
+    } catch (error) {
+      await note(`No se pudo pausar ${name}: ${commandError(error)}`);
+    }
+  }
+  return paused;
+}
+
+async function resumeContainers(
+  names: string[],
+  note: (message: string) => Promise<void>,
+): Promise<void> {
+  for (const name of names) {
+    if (!APP_CONTAINER_NAME.test(name)) {
+      continue;
+    }
+    try {
+      execSync(`docker start "${name}"`, { stdio: "pipe" });
+      await note(`Contenedor anterior ${name} reanudado`);
+    } catch (error) {
+      await note(`No se pudo reanudar ${name}: ${commandError(error)}`);
+    }
+  }
+}
+
 async function retirePreviousDeploys(
   appName: string,
   currentProjectId: string,
   note: (message: string) => Promise<void>,
+  paused: string[] = [],
 ): Promise<void> {
-  for (const name of listPreviousContainers(appName, currentProjectId)) {
+  const names = [
+    ...new Set([...listPreviousContainers(appName, currentProjectId), ...paused]),
+  ];
+  for (const name of names) {
     const match = APP_CONTAINER_NAME.exec(name);
     if (!match) {
       continue;
