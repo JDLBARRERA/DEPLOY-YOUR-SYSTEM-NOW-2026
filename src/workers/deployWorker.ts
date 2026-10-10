@@ -881,13 +881,17 @@ function sanitizeDatabaseUrl(value: string): string {
   ) {
     url = url.slice(1, -1).trim();
   }
-  while (
-    url.startsWith("postgresql://postgresql://") ||
-    url.startsWith("postgres://postgresql://")
-  ) {
-    url = url
-      .replace("postgresql://postgresql://", "postgresql://")
-      .replace("postgres://postgresql://", "postgresql://");
+  const doubled = [
+    "postgresql://postgresql://",
+    "postgres://postgresql://",
+    "postgres://postgres://",
+  ];
+  let previous = "";
+  while (previous !== url) {
+    previous = url;
+    for (const scheme of doubled) {
+      url = url.replaceAll(scheme, "postgresql://");
+    }
   }
   return url;
 }
