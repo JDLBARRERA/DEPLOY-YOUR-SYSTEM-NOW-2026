@@ -193,10 +193,11 @@ export default function DeploymentsPage() {
       {open ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-4">
           <AeroWindow title="Nuevo Despliegue" dialog onClose={closeForm}>
-            <p className="mb-3 text-sm text-slate-600">
-              El motor clona un repositorio público de GitHub y lo pone en cola.
-            </p>
-            <form className="flex flex-col gap-3" onSubmit={onSubmit}>
+            <form className="flex max-h-[60vh] flex-col overflow-hidden" onSubmit={onSubmit}>
+              <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
+              <p className="text-sm text-slate-600">
+                El motor clona un repositorio público de GitHub y lo pone en cola.
+              </p>
               <WinField
                 id="repoUrl"
                 name="repoUrl"
@@ -283,7 +284,8 @@ export default function DeploymentsPage() {
                   </div>
                 </div>
               </details>
-              <div className="flex justify-end gap-2">
+              </div>
+              <div className="mt-3 flex shrink-0 justify-end gap-2">
                 <WinButton onClick={closeForm}>Cancelar</WinButton>
                 <WinButton type="submit" disabled={pending}>
                   {pending ? "Enviando..." : "Crear"}
