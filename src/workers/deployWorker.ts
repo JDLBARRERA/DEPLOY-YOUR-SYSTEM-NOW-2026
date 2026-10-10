@@ -351,36 +351,22 @@ async function retirePreviousDeploys(
   currentProjectId: string,
   note: (message: string) => Promise<void>,
 ): Promise<void> {
-  const previous = new Set<string>();
   for (const name of listPreviousContainers(appName, currentProjectId)) {
     const match = APP_CONTAINER_NAME.exec(name);
-    if (match) {
-      previous.add(match[1]);
+    if (!match) {
+      continue;
     }
-  }
-
-  const records = await store.list();
-  for (const record of records) {
-    if (
-      record.image === appName &&
-      record.projectId !== currentProjectId &&
-      APP_CONTAINER_NAME.test(`paas-${record.projectId}`)
-    ) {
-      previous.add(record.projectId);
-    }
-  }
-
-  for (const previousId of previous) {
-    const name = `paas-${previousId}`;
+    const previousId = match[1];
     try {
       execSync(`docker stop "${name}"`, { stdio: "pipe" });
     } catch {
-      // Ya estaba detenido o no existe.
+      // El contenedor dejó de estar en marcha entre el listado y el stop.
     }
     try {
-      execSync(`docker rm "${name}"`, { stdio: "pipe" });
-    } catch {
-      // Ya no existe.
+      execSync(`docker rm -f "${name}"`, { stdio: "pipe" });
+    } catch (error) {
+      await note(`No se pudo eliminar ${name}: ${commandError(error)}`);
+      continue;
     }
     try {
       await caddy.deleteRoute(previousId);
@@ -399,7 +385,7 @@ async function retirePreviousDeploys(
 function listPreviousContainers(appName: string, currentProjectId: string): string[] {
   let listed = "";
   try {
-    listed = execSync(`docker ps -a --format "{{.Names}}"`, {
+    listed = execSync(`docker ps --filter status=running --format "{{.Names}}"`, {
       stdio: "pipe",
       encoding: "utf8",
     });
