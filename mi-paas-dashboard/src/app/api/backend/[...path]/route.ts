@@ -35,14 +35,14 @@ async function handle(request: Request, context: Ctx): Promise<Response> {
   const isDatabasesRoute = segments[0] === "databases";
   const isDeployRoute = segments[0] === "deploy";
   const isProjectsRoute = segments[0] === "projects";
+  const isEnvironmentGroupsRoute = segments[0] === "environment-groups";
   const isSettingsRoute = segments[0] === "settings";
+  const needsAdminKey =
+    isDeployRoute || isDatabasesRoute || isProjectsRoute || isEnvironmentGroupsRoute;
   const forceLocal =
     isSettingsRoute || (isDatabasesRoute && isSqliteUrl());
 
-  if (
-    (isDeployRoute || isDatabasesRoute || isProjectsRoute) &&
-    !(await isAuthorizedRequest(request))
-  ) {
+  if (needsAdminKey && !(await isAuthorizedRequest(request))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -59,9 +59,7 @@ async function handle(request: Request, context: Ctx): Promise<Response> {
         body: bodyText,
         headers: {
           Accept: request.headers.get("Accept") ?? "application/json",
-          ...(isDeployRoute || isDatabasesRoute || isProjectsRoute
-            ? { "x-api-key": adminApiKey() }
-            : {}),
+          ...(needsAdminKey ? { "x-api-key": adminApiKey() } : {}),
         },
       },
       method === "GET" || method === "HEAD" ? 2500 : 60_000,
