@@ -24,40 +24,13 @@ function toEnvText(rows: ProjectVariable[]): string {
   return rows.map((row) => `${row.key}=${formatEnvValue(row.value)}`).join("\n");
 }
 
-function parseEnvText(text: string): Array<{ key: string; value: string }> {
-  const pairs: Array<{ key: string; value: string }> = [];
-  const seen = new Set<string>();
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
-    if (eq <= 0) {
-      throw new Error(`Línea inválida: ${line}`);
-    }
-    const key = line.slice(0, eq).trim();
-    let value = line.slice(eq + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-    }
-    if (seen.has(key)) {
-      throw new Error(`La clave ${key} está repetida`);
-    }
-    seen.add(key);
-    pairs.push({ key, value });
-  }
-  return pairs;
-}
-
 export function ProjectVariables({ projectId }: { projectId: string }) {
   const [variables, setVariables] = useState<ProjectVariable[] | null>(null);
   const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [block, setBlock] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const exportMenu = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -154,55 +127,37 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
 
   function startEdit() {
     setExportOpen(false);
-    setBlock(savedText());
+    setDrafts(Object.fromEntries((variables ?? []).map((item) => [item.id, item.value])));
     setEditing(true);
   }
 
   function cancelEdit() {
+    setDrafts({});
     setEditing(false);
-    setBlock("");
   }
 
-  async function saveBlock() {
-    let pairs: Array<{ key: string; value: string }>;
-    try {
-      pairs = parseEnvText(block);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "El bloque no es un .env válido");
+  async function saveEdits() {
+    const current = variables ?? [];
+    const changed = current.filter((item) => (drafts[item.id] ?? item.value) !== item.value);
+    if (changed.length === 0) {
+      setDrafts({});
+      setEditing(false);
       return;
     }
-    const current = variables ?? [];
-    const byKey = new Map(current.map((item) => [item.key, item]));
-    const nextKeys = new Set(pairs.map((item) => item.key));
     setBusy("bulk");
     try {
-      for (const pair of pairs) {
-        const existing = byKey.get(pair.key);
-        if (!existing) {
-          await apiFetch(`/projects/${encodeURIComponent(projectId)}/variables`, {
-            method: "POST",
-            body: JSON.stringify(pair),
-          });
-        } else if (existing.value !== pair.value) {
-          await apiFetch(
-            `/projects/${encodeURIComponent(projectId)}/variables/${encodeURIComponent(existing.id)}`,
-            { method: "PATCH", body: JSON.stringify({ value: pair.value }) },
-          );
-        }
-      }
-      for (const existing of current) {
-        if (nextKeys.has(existing.key)) continue;
+      for (const item of changed) {
         await apiFetch(
-          `/projects/${encodeURIComponent(projectId)}/variables/${encodeURIComponent(existing.id)}`,
-          { method: "DELETE" },
+          `/projects/${encodeURIComponent(projectId)}/variables/${encodeURIComponent(item.id)}`,
+          { method: "PATCH", body: JSON.stringify({ value: drafts[item.id] ?? item.value }) },
         );
       }
       const rows = await apiFetch<ProjectVariable[]>(
         `/projects/${encodeURIComponent(projectId)}/variables`,
       );
       setVariables(rows);
+      setDrafts({});
       setEditing(false);
-      setBlock("");
       toast.success("Variables guardadas");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudieron guardar las variables");
@@ -251,7 +206,7 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
               <button
                 type="button"
                 disabled={busy !== null}
-                onClick={() => void saveBlock()}
+                onClick={() => void saveEdits()}
                 className="inline-flex items-center gap-1 rounded-md border border-slate-950/40 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] disabled:opacity-60"
               >
                 {busy === "bulk" ? "Guardando..." : "Guardar Cambios"}
@@ -273,16 +228,6 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
           )}
         </div>
       </div>
-      {editing ? (
-        <textarea
-          value={block}
-          spellCheck={false}
-          aria-label="Editor de variables"
-          onChange={(event) => setBlock(event.target.value)}
-          className="min-h-48 w-full rounded-md border border-white/70 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]"
-        />
-      ) : (
-        <>
       <form className="mb-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]" onSubmit={(event) => void onSubmit(event)}>
         <input
           name="key"
@@ -321,11 +266,14 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
               </span>
               <input
                 type={visible[variable.id] ? "text" : "password"}
-                value={variable.value}
-                readOnly
+                value={editing ? (drafts[variable.id] ?? variable.value) : variable.value}
+                readOnly={!editing}
                 aria-label={`Valor de ${variable.key}`}
                 spellCheck={false}
                 autoComplete="off"
+                onChange={(event) =>
+                  setDrafts((current) => ({ ...current, [variable.id]: event.target.value }))
+                }
                 className="min-w-0 flex-1 rounded-md border border-white/70 bg-white/80 px-2 py-1.5 font-mono text-xs text-slate-900"
               />
               <button
@@ -350,8 +298,6 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
             </li>
           ))}
         </ul>
-      )}
-        </>
       )}
     </div>
   );
