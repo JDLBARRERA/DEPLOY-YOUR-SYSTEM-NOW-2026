@@ -365,6 +365,22 @@ function normalizeLocalDomain(value: string): string {
   return host;
 }
 
+export function deleteLocalProject(id: string): boolean {
+  const store = ensureStore();
+  const known = listProjects().find((project) => project.id === id);
+  if (!known) {
+    return false;
+  }
+  store.projects = (store.projects ?? []).filter((project) => project.id !== id);
+  store.addons = (store.addons ?? []).filter((addon) => addon.projectId !== id);
+  store.variables = (store.variables ?? []).filter((variable) => variable.projectId !== id);
+  store.deployments = store.deployments.filter(
+    (deployment) => deployment.projectName !== known.name,
+  );
+  saveStore(store);
+  return true;
+}
+
 export function updateProjectLimits(
   id: string,
   patch: { memoryLimit?: string; cpuLimit?: number; githubToken?: string; customDomain?: string },

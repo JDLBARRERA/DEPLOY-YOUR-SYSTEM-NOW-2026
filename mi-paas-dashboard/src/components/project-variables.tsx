@@ -137,7 +137,7 @@ export function ProjectVariables({ projectId }: { projectId: string }) {
           {variables.map((variable) => (
             <li
               key={variable.id}
-              className="grid items-center gap-2 rounded-md border border-white/70 bg-white/60 p-2 sm:grid-cols-[8rem_1fr_auto]"
+              className="grid items-center gap-2 rounded-md border border-white/70 bg-white/60 p-2 sm:grid-cols-[8rem_minmax(0,1fr)_auto_auto]"
             >
               <span className="truncate font-mono text-xs font-semibold">{variable.key}</span>
               <input

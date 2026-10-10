@@ -25,6 +25,8 @@ const CPU_OPTIONS = [0.5, 1, 2];
 export function ProjectLimitsCard() {
   const [projects, setProjects] = useState<ProjectLimits[] | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,6 +81,25 @@ export function ProjectLimitsCard() {
     }
   }
 
+  async function remove(project: ProjectLimits) {
+    if (confirmDeleteId !== project.id) {
+      setConfirmDeleteId(project.id);
+      return;
+    }
+    setConfirmDeleteId(null);
+    setSavingId(project.id);
+    try {
+      await apiFetch(`/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
+      setProjects((current) => current?.filter((item) => item.id !== project.id) ?? []);
+      setOpenId((current) => (current === project.id ? null : current));
+      toast.success(`${project.name} eliminado`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo eliminar el proyecto");
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   async function save(project: ProjectLimits) {
     setSavingId(project.id);
     try {
@@ -119,19 +140,52 @@ export function ProjectLimitsCard() {
           {projects.map((project) => (
             <div
               key={project.id}
-              className="rounded-md border border-white/60 bg-white/50 p-3"
+              className="rounded-md border border-sky-200/80 bg-white/70 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]"
             >
+              <div className="flex items-start justify-between gap-3">
+                <button
+                  type="button"
+                  className="min-w-0 text-left"
+                  onClick={() =>
+                    setOpenId((current) => (current === project.id ? null : project.id))
+                  }
+                >
+                  <p className="truncate text-sm font-semibold">{project.name}</p>
+                  <p className="break-all font-mono text-xs text-slate-500">{project.repoUrl}</p>
+                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    className="text-xs text-sky-800 underline"
+                    onClick={() =>
+                      setOpenId((current) => (current === project.id ? null : project.id))
+                    }
+                  >
+                    {openId === project.id ? "Ocultar" : "Configurar"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-rose-900/40 bg-gradient-to-b from-rose-200 to-rose-500 px-2 py-1 text-xs font-semibold text-rose-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] disabled:opacity-60"
+                    disabled={savingId === project.id}
+                    onClick={() => void remove(project)}
+                  >
+                    {savingId === project.id
+                      ? "Eliminando..."
+                      : confirmDeleteId === project.id
+                        ? "Sí, eliminar"
+                        : "Eliminar Proyecto"}
+                  </button>
+                </div>
+              </div>
+            {openId === project.id ? (
+            <>
             <form
-              className="flex flex-col gap-2"
+              className="mt-3 flex flex-col gap-2 border-t border-sky-100 pt-3"
               onSubmit={(event) => {
                 event.preventDefault();
                 void save(project);
               }}
             >
-              <div className="min-w-0 text-sm">
-                <p className="truncate font-semibold">{project.name}</p>
-                <p className="truncate text-xs text-slate-500">{project.repoUrl}</p>
-              </div>
               <label className="flex flex-col gap-1 text-xs">
                 Dominio personalizado
                 <input
@@ -213,6 +267,8 @@ export function ProjectLimitsCard() {
             </form>
             <ProjectVariables projectId={project.id} />
             <ProjectAddons projectId={project.id} projectName={project.name} />
+            </>
+            ) : null}
             </div>
           ))}
         </div>

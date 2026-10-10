@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import type { FastifyInstance } from "fastify";
 import { requireAdmin } from "../auth/requireAdmin.js";
 import { prisma } from "../db.js";
@@ -67,6 +68,82 @@ function prismaCode(error: unknown): string | null {
     return error.code;
   }
   return null;
+}
+
+const APP_CONTAINER_NAME = /^paas-([a-f0-9]{16})$/;
+
+async function retireProjectApps(projectName: string, store?: DeploymentStore): Promise<void> {
+  let image: string;
+  try {
+    image = normalizeImageName(projectName);
+  } catch {
+    return;
+  }
+
+  let listed = "";
+  try {
+    listed = execSync(`docker ps -a --format "{{.Names}}"`, {
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+  } catch {
+    listed = "";
+  }
+
+  const ids = new Set<string>();
+  for (const name of listed.split(/\s+/).filter(Boolean)) {
+    const match = APP_CONTAINER_NAME.exec(name);
+    if (!match) {
+      continue;
+    }
+    let inspected = "";
+    try {
+      inspected = execSync(
+        `docker inspect -f '{{.Config.Image}}|{{index .Config.Labels "paas.app"}}' "${name}"`,
+        { stdio: "pipe", encoding: "utf8" },
+      ).trim();
+    } catch {
+      continue;
+    }
+    const [configured = "", label = ""] = inspected.split("|");
+    if (label === image || configured === image || configured.split(":")[0] === image) {
+      ids.add(match[1]);
+    }
+  }
+
+  if (store) {
+    for (const record of await store.list()) {
+      if (record.image === image && APP_CONTAINER_NAME.test(`paas-${record.projectId}`)) {
+        ids.add(record.projectId);
+      }
+    }
+  }
+
+  const caddy = new CaddyClient();
+  for (const id of ids) {
+    const name = `paas-${id}`;
+    try {
+      execSync(`docker stop "${name}"`, { stdio: "pipe" });
+    } catch {
+      // Ya estaba detenido.
+    }
+    try {
+      execSync(`docker rm "${name}"`, { stdio: "pipe" });
+    } catch {
+      // Ya no existe.
+    }
+    try {
+      await caddy.deleteRoute(id);
+    } catch {
+      // La ruta ya no está.
+    }
+    await store?.update(id, { status: "replaced" });
+  }
+  try {
+    await caddy.ensureCatchAll();
+  } catch {
+    // Caddy sigue con la ruta anterior si el admin no responde.
+  }
 }
 
 async function refreshRunningRoute(
@@ -204,6 +281,53 @@ export async function projectRoutes(
   );
 
   const addons = new DatabaseAddonService();
+
+  app.delete<{ Params: { id: string } }>(
+    "/projects/:id",
+    { preValidation: requireAdmin },
+    async (request, reply) => {
+      const project = await prisma.project.findUnique({
+        where: { id: request.params.id },
+        select: { id: true, name: true, addons: { select: { id: true } } },
+      });
+      if (!project) {
+        return reply.code(404).send({ error: "Proyecto no encontrado" });
+      }
+
+      for (const addon of project.addons) {
+        try {
+          await addons.remove(project.id, addon.id);
+        } catch (error) {
+          request.log.error(
+            { err: error instanceof Error ? error.message : error },
+            "No se pudo retirar una base del proyecto",
+          );
+        }
+      }
+
+      try {
+        await retireProjectApps(project.name, store);
+      } catch (error) {
+        request.log.error(
+          { err: error instanceof Error ? error.message : error },
+          "No se pudieron retirar los contenedores del proyecto",
+        );
+      }
+
+      try {
+        await prisma.deployment.deleteMany({ where: { projectId: project.id } });
+        await prisma.project.delete({ where: { id: project.id } });
+        return { ok: true };
+      } catch (error) {
+        if (prismaCode(error) === "P2025") {
+          return reply.code(404).send({ error: "Proyecto no encontrado" });
+        }
+        request.log.error(error);
+        return reply.code(500).send({ error: "No se pudo eliminar el proyecto" });
+      }
+    },
+  );
+
   const addonCreateSchema = {
     type: "object",
     additionalProperties: false,

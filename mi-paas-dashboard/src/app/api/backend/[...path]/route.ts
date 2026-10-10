@@ -7,6 +7,7 @@ import {
   createProjectAddon,
   deleteDatabase,
   deleteLocalVariable,
+  deleteLocalProject,
   deleteProjectAddon,
   getSettings,
   isSqliteUrl,
@@ -109,6 +110,17 @@ async function localFallback(
     return NextResponse.json(listProjects(), {
       headers: { "x-dn-mode": "local" },
     });
+  }
+
+  if (method === "DELETE" && head === "projects" && id && !action) {
+    const removed = deleteLocalProject(id);
+    if (!removed) {
+      return NextResponse.json(
+        { error: "Proyecto no encontrado" },
+        { status: 404, headers: { "x-dn-mode": "local" } },
+      );
+    }
+    return NextResponse.json({ ok: true }, { headers: { "x-dn-mode": "local" } });
   }
 
   if ((method === "PATCH" || method === "PUT") && head === "projects" && id && !action) {
