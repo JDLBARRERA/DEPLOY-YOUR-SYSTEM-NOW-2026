@@ -35,8 +35,8 @@ const store = new DeploymentStore(connection);
 const logs = new LogBus(connection);
 const caddy = new CaddyClient();
 const concurrency = Number(process.env.DEPLOY_CONCURRENCY ?? 5);
-const HEALTH_TIMEOUT_MS = 15_000;
-const HEALTH_INTERVAL_MS = 2_000;
+const HEALTH_TIMEOUT_MS = 20_000;
+const HEALTH_INTERVAL_MS = 1_500;
 const LOCK_DURATION_MS = 300_000;
 
 async function finishDeployRecord(
@@ -344,6 +344,7 @@ const worker = new Worker<DeployJobData>(
       if (pythonRuntime) {
         runtimeEnv.DATABASE_URL = withoutPrismaSchemaParam(runtimeEnv.DATABASE_URL);
       }
+      runtimeEnv.DATABASE_URL = sanitizeDatabaseUrl(runtimeEnv.DATABASE_URL);
       runtimeEnv.PORT = String(CONTAINER_INTERNAL_PORT);
       runtimeEnv.NODE_ENV = "production";
       const envFlags = dockerEnvFlags(runtimeEnv);
@@ -374,9 +375,9 @@ const worker = new Worker<DeployJobData>(
       }
 
       await note(
-        `Health check: docker inspect Running cada ${HEALTH_INTERVAL_MS / 1000}s durante hasta ${HEALTH_TIMEOUT_MS / 1000}s...`,
+        `Health check: HTTP HEAD :${CONTAINER_INTERNAL_PORT} cada ${HEALTH_INTERVAL_MS / 1000}s durante hasta ${HEALTH_TIMEOUT_MS / 1000}s, sin reinicios...`,
       );
-      const health = await checkContainerHealth(containerId, note);
+      const health = await checkContainerHealth(containerId, deployNetwork, note);
       if (!health.ok) {
         const dockerLogs = readDockerLogs(containerId);
         const failure = [
@@ -671,6 +672,20 @@ async function ensureCaddyOnNetwork(network: string): Promise<void> {
   }
 }
 
+function sanitizeDatabaseUrl(value: string): string {
+  let url = value.trim();
+  if (
+    (url.startsWith('"') && url.endsWith('"')) ||
+    (url.startsWith("'") && url.endsWith("'"))
+  ) {
+    url = url.slice(1, -1).trim();
+  }
+  if (url.startsWith("postgresql://postgresql://")) {
+    url = url.replace("postgresql://postgresql://", "postgresql://");
+  }
+  return url;
+}
+
 function withoutPrismaSchemaParam(value: string): string {
   const [withoutHash, ...hashParts] = value.split("#");
   const queryAt = withoutHash.indexOf("?");
@@ -726,8 +741,37 @@ function containerState(containerId: string): {
   }
 }
 
+function containerIp(containerId: string, network: string): string {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(network)) {
+    return "";
+  }
+  try {
+    const raw = execSync(
+      `docker inspect --format '{{json .NetworkSettings.Networks}}' "${containerId}"`,
+      { stdio: "pipe", encoding: "utf8" },
+    ).trim();
+    const networks = JSON.parse(raw) as Record<string, { IPAddress?: string }>;
+    return networks[network]?.IPAddress?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+async function probeHttp(ip: string, port: number): Promise<number | null> {
+  try {
+    const response = await fetch(`http://${ip}:${port}/`, {
+      method: "HEAD",
+      signal: AbortSignal.timeout(2_000),
+    });
+    return response.status;
+  } catch {
+    return null;
+  }
+}
+
 async function checkContainerHealth(
   containerId: string,
+  network: string,
   note?: (message: string) => Promise<void>,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
@@ -741,10 +785,25 @@ async function checkContainerHealth(
     if (failed) {
       return { ok: false, reason: failed };
     }
+    const ip = containerIp(containerId, network);
+    const status = ip ? await probeHttp(ip, CONTAINER_INTERNAL_PORT) : null;
     if (note) {
       await note(
-        `Health check intento ${attempt}: Running=${last.running} (estado "${last.status}", RestartCount=${last.restartCount}).`,
+        status === null
+          ? `Health check intento ${attempt}: Running=${last.running} (estado "${last.status}", RestartCount=${last.restartCount}), HTTP aún sin respuesta.`
+          : `Health check intento ${attempt}: HTTP ${status}, RestartCount=${last.restartCount}.`,
       );
+    }
+    if (
+      status !== null &&
+      last.running &&
+      last.status === "running" &&
+      last.restartCount === 0
+    ) {
+      if (note) {
+        await note(`Health check OK: HTTP ${status} y RestartCount=0.`);
+      }
+      return { ok: true };
     }
     if (Date.now() + HEALTH_INTERVAL_MS > deadline) {
       break;
@@ -757,17 +816,9 @@ async function checkContainerHealth(
   if (failed) {
     return { ok: false, reason: failed };
   }
-  if (last.running && last.status === "running" && last.restartCount === 0) {
-    if (note) {
-      await note(
-        `Health check OK: sigue running tras ${HEALTH_TIMEOUT_MS / 1000}s, sin reinicios.`,
-      );
-    }
-    return { ok: true };
-  }
   return {
     ok: false,
-    reason: `Health check falló tras ${HEALTH_TIMEOUT_MS / 1000}s: estado "${last.status}", RestartCount=${last.restartCount}, OOMKilled=${last.oomKilled}.`,
+    reason: `Health check falló tras ${HEALTH_TIMEOUT_MS / 1000}s: Uvicorn no respondió HTTP en el puerto ${CONTAINER_INTERNAL_PORT} (estado "${last.status}", RestartCount=${last.restartCount}).`,
   };
 }
 
