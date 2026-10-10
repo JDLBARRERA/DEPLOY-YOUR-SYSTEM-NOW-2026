@@ -57,21 +57,28 @@ const DEFAULT_RUNTIME_DATABASE_URL =
 
 const PORT_KEY_PREFIX = "deploy:port:";
 
-const DEFAULT_DOCKERFILE = `FROM node:18-alpine
+function hasPrismaSchema(dir: string): boolean {
+  return repoFile(dir, path.join("prisma", "schema.prisma")) || repoFile(dir, "schema.prisma");
+}
+
+function nodeDockerfile(dir: string): string {
+  const prisma = hasPrismaSchema(dir)
+    ? "# 1. Generar cliente de Prisma\nRUN npx prisma generate\n"
+    : "";
+  return `FROM node:20-alpine
 WORKDIR /app
 COPY package*.json ./
 ENV NODE_ENV=development
 RUN npm install
 COPY . .
-# 1. Generar cliente de Prisma
-RUN npx prisma generate
-# 2. Compilar TypeScript
+${prisma}# 2. Compilar TypeScript
 RUN npm run build
 # 3. Copiar la carpeta generada a dist/ para runtime
 RUN cp -r src/generated dist/ || true
 EXPOSE 8000
 CMD ["npm", "start"]
 `;
+}
 
 function repoFile(dir: string, name: string): boolean {
   return fs.existsSync(path.join(dir, name));
@@ -323,12 +330,11 @@ const worker = new Worker<DeployJobData>(
           `Dockerfile generado desde requirements.txt (Python). Comando desde ${start.source}: ${start.command}${ignored ? ". .dockerignore añadido." : ""}`,
         );
       } else if (repoFile(repoDir, "package.json")) {
-        fs.writeFileSync(dockerfilePath, DEFAULT_DOCKERFILE);
+        const withPrisma = hasPrismaSchema(repoDir);
+        fs.writeFileSync(dockerfilePath, nodeDockerfile(repoDir));
         const ignored = writeGeneratedDockerignore(repoDir);
         await note(
-          ignored
-            ? "Dockerfile generado desde package.json (Node.js). .dockerignore añadido."
-            : "Dockerfile generado desde package.json (Node.js)",
+          `Dockerfile generado desde package.json (Node.js${withPrisma ? ", con prisma generate" : ""})${ignored ? ". .dockerignore añadido." : ""}`,
         );
       } else {
         await note("Falta Dockerfile, package.json o requirements.txt");
