@@ -13,6 +13,7 @@ export default function DeploymentsPage() {
   const [pending, setPending] = useState(false);
   const [redeployingId, setRedeployingId] = useState<string | null>(null);
   const [logsFor, setLogsFor] = useState<Deployment | null>(null);
+  const [envRows, setEnvRows] = useState<EnvDraft[]>([]);
 
   const load = useCallback(async () => {
     const next = await apiFetch<Deployment[]>("/deployments");
@@ -43,6 +44,9 @@ export default function DeploymentsPage() {
     try {
       const branch = String(form.get("branch") ?? "main").trim() || "main";
       const clearCache = form.get("clearCache") === "on";
+      const variables = envRows
+        .map((row) => ({ key: row.key.trim(), value: row.value }))
+        .filter((row) => row.key.length > 0);
       await apiFetch("/deploy", {
         method: "POST",
         body: JSON.stringify({
@@ -50,10 +54,11 @@ export default function DeploymentsPage() {
           projectName: String(form.get("projectName") ?? ""),
           branch,
           clearCache,
+          variables,
         }),
       });
       formElement.reset();
-      setOpen(false);
+      closeForm();
       toast.success("Despliegue en cola");
       await load();
     } catch (error) {
@@ -61,6 +66,15 @@ export default function DeploymentsPage() {
     } finally {
       setPending(false);
     }
+  }
+
+  function closeForm() {
+    setOpen(false);
+    setEnvRows([]);
+  }
+
+  function addEnvRow() {
+    setEnvRows((rows) => [...rows, { id: crypto.randomUUID(), key: "", value: "" }]);
   }
 
   async function onRedeploy(item: Deployment) {
@@ -100,7 +114,14 @@ export default function DeploymentsPage() {
       <AeroWindow title="Deployments">
         <div className="mb-4 flex items-center justify-between gap-4">
           <p className="text-sm text-slate-600">Repositorios públicos enviados al motor.</p>
-          <WinButton onClick={() => setOpen(true)}>Nuevo Despliegue</WinButton>
+          <WinButton
+            onClick={() => {
+              setEnvRows([]);
+              setOpen(true);
+            }}
+          >
+            Nuevo Despliegue
+          </WinButton>
         </div>
         {items === null ? (
           <p className="text-sm">Cargando...</p>
@@ -171,7 +192,7 @@ export default function DeploymentsPage() {
       </AeroWindow>
       {open ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-4">
-          <AeroWindow title="Nuevo Despliegue" dialog onClose={() => setOpen(false)}>
+          <AeroWindow title="Nuevo Despliegue" dialog onClose={closeForm}>
             <p className="mb-3 text-sm text-slate-600">
               El motor clona un repositorio público de GitHub y lo pone en cola.
             </p>
@@ -213,8 +234,57 @@ export default function DeploymentsPage() {
                   </span>
                 </span>
               </label>
+              <details className="rounded-md border border-white/70 bg-white/40 px-2.5 py-2">
+                <summary className="cursor-pointer text-sm font-medium text-slate-800">
+                  Variables de entorno
+                </summary>
+                <div className="mt-2 flex flex-col gap-2">
+                  {envRows.map((row) => (
+                    <div key={row.id} className="flex items-center gap-2">
+                      <input
+                        aria-label="Clave"
+                        value={row.key}
+                        placeholder="CLAVE"
+                        onChange={(event) => {
+                          const key = event.target.value;
+                          setEnvRows((rows) =>
+                            rows.map((item) => (item.id === row.id ? { ...item, key } : item)),
+                          );
+                        }}
+                        className="min-w-0 flex-1 rounded-md border border-white/70 bg-white/80 px-2 py-1.5 text-sm text-slate-900 shadow-[inset_0_1px_3px_rgba(0,0,0,0.15)] outline-none"
+                      />
+                      <input
+                        aria-label="Valor"
+                        type="password"
+                        value={row.value}
+                        placeholder="valor"
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setEnvRows((rows) =>
+                            rows.map((item) => (item.id === row.id ? { ...item, value } : item)),
+                          );
+                        }}
+                        className="min-w-0 flex-1 rounded-md border border-white/70 bg-white/80 px-2 py-1.5 text-sm text-slate-900 shadow-[inset_0_1px_3px_rgba(0,0,0,0.15)] outline-none"
+                      />
+                      <WinButton
+                        compact
+                        onClick={() =>
+                          setEnvRows((rows) => rows.filter((item) => item.id !== row.id))
+                        }
+                      >
+                        Quitar
+                      </WinButton>
+                    </div>
+                  ))}
+                  <div>
+                    <WinButton compact onClick={addEnvRow}>
+                      Añadir variable
+                    </WinButton>
+                  </div>
+                </div>
+              </details>
               <div className="flex justify-end gap-2">
-                <WinButton onClick={() => setOpen(false)}>Cancelar</WinButton>
+                <WinButton onClick={closeForm}>Cancelar</WinButton>
                 <WinButton type="submit" disabled={pending}>
                   {pending ? "Enviando..." : "Crear"}
                 </WinButton>
@@ -235,11 +305,42 @@ export default function DeploymentsPage() {
 }
 
 function BuildLogs({ deployment }: { deployment: Deployment }) {
+  const [current, setCurrent] = useState(deployment);
   const [lines, setLines] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
-  const bottom = useRef<HTMLDivElement>(null);
-  const failed = deployment.status === "failed";
+  const [query, setQuery] = useState("");
+  const [liveTail, setLiveTail] = useState(isBuilding(deployment.status));
+  const [now, setNow] = useState(() => Date.now());
+  const box = useRef<HTMLDivElement>(null);
+  const pinning = useRef(false);
+  const failed = current.status === "failed";
+  const needle = query.trim().toLowerCase();
+  const visible = needle
+    ? lines.filter((line) => line.toLowerCase().includes(needle))
+    : lines;
+
+  useEffect(() => {
+    if (!isBuilding(current.status)) {
+      setLiveTail(false);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void apiFetch<Deployment[]>("/deployments")
+        .then((rows) => {
+          const next = rows.find((row) => row.projectId === deployment.projectId);
+          if (next) setCurrent(next);
+        })
+        .catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [current.status, deployment.projectId]);
+
+  useEffect(() => {
+    if (!isBuilding(current.status)) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [current.status]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -269,7 +370,7 @@ function BuildLogs({ deployment }: { deployment: Deployment }) {
           const next = events.map(readSseData).filter((line) => line.length > 0);
           if (next.length > 0) {
             received = true;
-            setLines((current) => [...current, ...next]);
+            setLines((existing) => [...existing, ...next]);
           }
         }
       } catch (cause) {
@@ -286,24 +387,78 @@ function BuildLogs({ deployment }: { deployment: Deployment }) {
   }, [deployment.projectId]);
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: "end" });
-  }, [lines]);
+    if (!liveTail) return;
+    const el = box.current;
+    if (!el) return;
+    pinning.current = true;
+    el.scrollTop = el.scrollHeight;
+    pinning.current = false;
+  }, [lines, query, liveTail]);
+
+  function onLogScroll() {
+    const el = box.current;
+    if (!el || !liveTail || pinning.current) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distance > 24) setLiveTail(false);
+  }
+
+  function followTail() {
+    setLiveTail(true);
+    const el = box.current;
+    if (!el) return;
+    pinning.current = true;
+    el.scrollTop = el.scrollHeight;
+    pinning.current = false;
+  }
+
+  const commit = current.commitHash?.trim() ?? "";
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-sm text-slate-600">
-        {deployment.projectName} · {deployment.status}
-      </p>
+      <p className="text-sm text-slate-600">{current.projectName}</p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-700">
+        <span className="inline-flex items-center gap-1.5">
+          Estado <StatusBadge status={current.status} />
+        </span>
+        <span>
+          Duración{" "}
+          <span className="tabular-nums">
+            {formatDuration(current.createdAt, current.finishedAt, isBuilding(current.status), now)}
+          </span>
+        </span>
+        <span>
+          Commit{" "}
+          <span className="font-mono" title={commit || undefined}>
+            {commit ? commit.slice(0, 7) : "No disponible"}
+          </span>
+        </span>
+        <span>Disparador {triggerLabel(current.trigger)}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Filtrar líneas"
+          aria-label="Filtrar líneas"
+          className="min-w-0 flex-1 rounded-md border border-white/70 bg-white/80 px-2 py-1.5 text-sm text-slate-900 shadow-[inset_0_1px_3px_rgba(0,0,0,0.15)] outline-none"
+        />
+        <WinButton compact onClick={followTail}>
+          {liveTail ? "Siguiendo" : "Live tail"}
+        </WinButton>
+      </div>
       <div
+        ref={box}
+        onScroll={onLogScroll}
         className="h-72 overflow-auto rounded-md bg-black p-3 text-xs leading-5 text-green-100"
         style={{ fontFamily: "Consolas, 'Courier New', monospace" }}
       >
         {error ? <p className="text-red-400">{error}</p> : null}
         {!ready && lines.length === 0 ? <p className="text-zinc-400">Conectando...</p> : null}
-        {ready && lines.length === 0 && !error ? (
-          <p className="text-zinc-400">Sin registros.</p>
+        {ready && visible.length === 0 && !error ? (
+          <p className="text-zinc-400">{needle ? "Sin coincidencias." : "Sin registros."}</p>
         ) : null}
-        {lines.map((line, index) => (
+        {visible.map((line, index) => (
           <p
             key={`${index}-${line}`}
             className={`whitespace-pre-wrap break-words ${failed && isErrorLine(line) ? "text-red-400" : ""}`}
@@ -311,10 +466,38 @@ function BuildLogs({ deployment }: { deployment: Deployment }) {
             {line}
           </p>
         ))}
-        <div ref={bottom} />
       </div>
     </div>
   );
+}
+
+type EnvDraft = { id: string; key: string; value: string };
+
+function isBuilding(status: string): boolean {
+  return status === "queued" || status === "building";
+}
+
+function triggerLabel(trigger: Deployment["trigger"]): string {
+  return trigger === "webhook" ? "Webhook de GitHub" : "Desplegado manualmente";
+}
+
+function formatDuration(
+  createdAt: string,
+  finishedAt: string | null | undefined,
+  ticking: boolean,
+  now: number,
+): string {
+  const start = new Date(createdAt).getTime();
+  if (!Number.isFinite(start)) return "—";
+  const end = finishedAt ? new Date(finishedAt).getTime() : ticking ? now : Number.NaN;
+  if (!Number.isFinite(end) || end < start) return "—";
+  const total = Math.floor((end - start) / 1000);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return `${hours} h ${minutes} min ${seconds} s`;
+  if (minutes > 0) return `${minutes} min ${seconds} s`;
+  return `${seconds} s`;
 }
 
 function readSseData(event: string): string {

@@ -13,6 +13,7 @@ import {
 } from "../services/DeployEngine.js";
 import type { DeploymentStore } from "../services/DeploymentStore.js";
 import type { LogBus } from "../services/LogBus.js";
+import { normalizeEnvPair } from "../services/projectEnv.js";
 
 const deployBodySchema = {
   type: "object",
@@ -25,6 +26,19 @@ const deployBodySchema = {
     branch: { type: "string", minLength: 1 },
     commitHash: { type: "string", minLength: 7 },
     clearCache: { type: "boolean" },
+    variables: {
+      type: "array",
+      maxItems: 50,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["key", "value"],
+        properties: {
+          key: { type: "string", minLength: 1, maxLength: 128 },
+          value: { type: "string", maxLength: 8000 },
+        },
+      },
+    },
   },
 } as const;
 
@@ -35,12 +49,92 @@ interface DeployBody {
   branch?: string;
   commitHash?: string;
   clearCache?: boolean;
+  variables?: Array<{ key: string; value: string }>;
 }
 
 export interface DeployRouteDeps {
   queue: Queue<DeployJobData>;
   store: DeploymentStore;
   logs: LogBus;
+}
+
+function parsedVariables(
+  variables: Array<{ key: string; value: string }> | undefined,
+): Array<{ key: string; value: string }> {
+  const pairs = variables ?? [];
+  const seen = new Set<string>();
+  const parsed: Array<{ key: string; value: string }> = [];
+  for (const variable of pairs) {
+    let pair: { key: string; value: string };
+    try {
+      pair = normalizeEnvPair(variable.key, variable.value);
+    } catch (error) {
+      throw new DeployValidationError(
+        error instanceof Error ? error.message : "Variable inválida",
+      );
+    }
+    if (seen.has(pair.key)) {
+      throw new DeployValidationError(`La clave ${pair.key} está repetida`);
+    }
+    seen.add(pair.key);
+    parsed.push(pair);
+  }
+  return parsed;
+}
+
+async function projectForDeploy(
+  projectName: string,
+  image: string,
+  repoUrl: string,
+  branch: string,
+  createIfMissing: boolean,
+): Promise<string | undefined> {
+  const projects = await prisma.project.findMany({ select: { id: true, name: true } });
+  const exact = projects.find((project) => project.name.trim() === projectName.trim());
+  const normalized = projects.find((project) => {
+    try {
+      return normalizeImageName(project.name) === image;
+    } catch {
+      return false;
+    }
+  });
+  const existing = exact ?? normalized;
+  if (existing) {
+    return existing.id;
+  }
+  if (!createIfMissing) {
+    return undefined;
+  }
+  const team = await prisma.team.findFirst({
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  if (!team) {
+    throw new DeployValidationError("No hay un equipo para guardar las variables");
+  }
+  const created = await prisma.project.create({
+    data: {
+      name: projectName.trim(),
+      repoUrl,
+      branch,
+      teamId: team.id,
+    },
+    select: { id: true },
+  });
+  return created.id;
+}
+
+async function saveProjectVariables(
+  projectId: string,
+  variables: Array<{ key: string; value: string }>,
+): Promise<void> {
+  for (const variable of variables) {
+    await prisma.environmentVariable.upsert({
+      where: { projectId_key: { projectId, key: variable.key } },
+      create: { projectId, key: variable.key, value: variable.value },
+      update: { value: variable.value },
+    });
+  }
 }
 
 async function deploymentForNamedProject(
@@ -90,6 +184,20 @@ export async function deployRoutes(
           assertGitCommit(commitHash);
         }
         const image = normalizeImageName(request.body.projectName);
+        const variables = parsedVariables(request.body.variables);
+        if (variables.length > 0) {
+          const projectId = await projectForDeploy(
+            request.body.projectName,
+            image,
+            request.body.repoUrl,
+            branch,
+            true,
+          );
+          if (!projectId) {
+            throw new DeployValidationError("No hay un equipo para guardar las variables");
+          }
+          await saveProjectVariables(projectId, variables);
+        }
         const deploymentId =
           request.body.deploymentId ??
           (await deploymentForNamedProject(request.body.projectName, image, branch));
@@ -101,6 +209,7 @@ export async function deployRoutes(
           branch,
           commitHash: commitHash || undefined,
           clearCache: request.body.clearCache === true,
+          trigger: "manual",
         });
 
         return reply.code(202).send({
