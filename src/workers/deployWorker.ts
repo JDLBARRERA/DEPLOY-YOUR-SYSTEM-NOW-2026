@@ -240,6 +240,7 @@ const worker = new Worker<DeployJobData>(
 
       console.log("Directorio del repo:", repoDir);
       const dockerfilePath = path.join(repoDir, "Dockerfile");
+      let pythonRuntime = false;
       const hasDockerfile = repoFile(repoDir, "Dockerfile");
       const hasCompose = repoFile(repoDir, "docker-compose.yml") || repoFile(repoDir, "docker-compose.yaml");
       if (hasDockerfile || hasCompose) {
@@ -258,6 +259,7 @@ const worker = new Worker<DeployJobData>(
             "Falta comando de arranque: Procfile (web:), render.yaml (startCommand), main.py o app.py",
           );
         }
+        pythonRuntime = true;
         fs.writeFileSync(dockerfilePath, pythonDockerfile(start.command));
         const ignored = writeGeneratedDockerignore(repoDir);
         await note(
@@ -338,6 +340,9 @@ const worker = new Worker<DeployJobData>(
       }
       if (!runtimeEnv.DATABASE_URL?.trim()) {
         runtimeEnv.DATABASE_URL = DEFAULT_RUNTIME_DATABASE_URL;
+      }
+      if (pythonRuntime) {
+        runtimeEnv.DATABASE_URL = withoutPrismaSchemaParam(runtimeEnv.DATABASE_URL);
       }
       runtimeEnv.PORT = String(CONTAINER_INTERNAL_PORT);
       runtimeEnv.NODE_ENV = "production";
@@ -653,9 +658,24 @@ async function ensureCaddyOnNetwork(network: string): Promise<void> {
   }
 }
 
+function withoutPrismaSchemaParam(value: string): string {
+  const [withoutHash, ...hashParts] = value.split("#");
+  const queryAt = withoutHash.indexOf("?");
+  if (queryAt === -1) {
+    return value;
+  }
+  const base = withoutHash.slice(0, queryAt);
+  const kept = withoutHash
+    .slice(queryAt + 1)
+    .split("&")
+    .filter((part) => part.length > 0 && !/^schema=/i.test(part));
+  const next = kept.length > 0 ? `${base}?${kept.join("&")}` : base;
+  return hashParts.length > 0 ? `${next}#${hashParts.join("#")}` : next;
+}
+
 function readDockerLogs(containerId: string): string {
   try {
-    return execSync(`docker logs --tail 80 "${containerId}"`, {
+    return execSync(`docker logs --tail 80 "${containerId}" 2>&1`, {
       stdio: "pipe",
       encoding: "utf8",
     }).trim();
