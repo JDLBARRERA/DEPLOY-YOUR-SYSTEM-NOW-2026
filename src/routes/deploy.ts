@@ -197,7 +197,12 @@ export async function deployRoutes(
         if (commitHash) {
           assertGitCommit(commitHash);
         }
-        const serviceType = request.body.serviceType === "worker" ? "worker" : "web";
+        const requestedType =
+          request.body.serviceType === "worker"
+            ? "worker"
+            : request.body.serviceType === "web"
+              ? "web"
+              : undefined;
         const image = normalizeImageName(request.body.projectName);
         const variables = parsedVariables(request.body.variables);
         const environmentGroupIds = request.body.environmentGroupIds;
@@ -211,20 +216,30 @@ export async function deployRoutes(
           request.body.repoUrl,
           branch,
           variables.length > 0 ||
-            serviceType === "worker" ||
+            requestedType === "worker" ||
             (environmentGroupIds?.length ?? 0) > 0 ||
             Boolean(startCommand) ||
             Boolean(request.body.ecosystemName?.trim()),
-          serviceType,
+          requestedType ?? "web",
         );
-        if (projectId) {
+        let serviceType: "web" | "worker" = requestedType ?? "web";
+        if (projectId && requestedType === undefined) {
+          const current = await prisma.project.findUnique({
+            where: { id: projectId },
+            select: { serviceType: true },
+          });
+          serviceType = current?.serviceType === "worker" ? "worker" : "web";
+        }
+        if (projectId && (requestedType !== undefined || startCommand !== undefined)) {
           await prisma.project.update({
             where: { id: projectId },
             data: {
-              serviceType,
+              ...(requestedType !== undefined ? { serviceType: requestedType } : {}),
               ...(startCommand !== undefined ? { startCommand } : {}),
             },
           });
+        }
+        if (projectId) {
           if (variables.length > 0) {
             await saveProjectVariables(projectId, variables);
           }

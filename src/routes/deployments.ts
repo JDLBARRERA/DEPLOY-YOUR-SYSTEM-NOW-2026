@@ -135,41 +135,56 @@ export async function deploymentRoutes(
             },
           },
         });
-        if (!source) {
+        const fromStore = source ? null : await deps.store.get(request.params.id);
+        const namedProject = fromStore
+          ? await prisma.project.findFirst({
+              where: { name: fromStore.projectName.trim() },
+              select: {
+                id: true,
+                name: true,
+                repoUrl: true,
+                branch: true,
+                serviceType: true,
+              },
+            })
+          : null;
+        const project = source?.project ?? namedProject;
+        if (!project) {
           return reply.code(404).send({ error: "Deployment not found" });
         }
 
         const branch =
-          (source.branch ?? source.project.branch ?? "main").trim() || "main";
+          (source?.branch ?? project.branch ?? "main").trim() || "main";
         assertGitBranch(branch);
-        const commitHash = source.commitHash?.trim() || undefined;
+        const commitHash = (source?.commitHash ?? fromStore?.commitHash)?.trim() || undefined;
         if (commitHash) {
           assertGitCommit(commitHash);
         }
+        const serviceType = project.serviceType === "worker" ? "worker" : "web";
 
         const redeploy = await prisma.deployment.create({
           data: {
-            projectId: source.projectId,
+            projectId: project.id,
             status: "queued",
-            type: source.type,
+            type: source?.type ?? "PRODUCTION",
             branch,
             commitHash: commitHash ?? null,
-            commitMessage: source.commitMessage,
-            commitAuthor: source.commitAuthor,
-            commitAuthorAvatar: source.commitAuthorAvatar,
+            commitMessage: source?.commitMessage ?? null,
+            commitAuthor: source?.commitAuthor ?? null,
+            commitAuthorAvatar: source?.commitAuthorAvatar ?? null,
           },
         });
 
-        const image = normalizeImageName(source.project.name);
+        const image = normalizeImageName(project.name);
         const queued = await enqueueDeployment(deps, {
-          repoUrl: source.project.repoUrl,
-          projectName: source.project.name,
+          repoUrl: project.repoUrl,
+          projectName: project.name,
           image,
           deploymentId: redeploy.id,
           branch,
           commitHash,
           trigger: "manual",
-          serviceType: source.project.serviceType === "worker" ? "worker" : "web",
+          serviceType,
         });
 
         return reply.code(202).send({
