@@ -58,6 +58,44 @@ export function redactEnvValues(text: string, env: Record<string, string>): stri
   return redacted;
 }
 
+export function normalizeStartCommand(value: string): string | null {
+  const command = value.trim();
+  if (!command) {
+    return null;
+  }
+  if (command.length > 500 || /[\r\n]/.test(command)) {
+    throw new Error("El comando de arranque no es válido");
+  }
+  return command;
+}
+
+export async function assignProjectEcosystem(
+  projectId: string,
+  ecosystemName: string,
+): Promise<void> {
+  const name = ecosystemName.trim();
+  if (!name) {
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { ecosystemId: null },
+    });
+    return;
+  }
+  if (name.length > 80 || /[\r\n]/.test(name)) {
+    throw new Error("El nombre del ecosistema no es válido");
+  }
+  const ecosystem = await prisma.ecosystem.upsert({
+    where: { name },
+    create: { name },
+    update: {},
+    select: { id: true },
+  });
+  await prisma.project.update({
+    where: { id: projectId },
+    data: { ecosystemId: ecosystem.id },
+  });
+}
+
 export async function replaceProjectEnvironmentGroups(
   projectId: string,
   groupIds: string[],
@@ -186,6 +224,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
   githubToken: string | null;
   customDomain: string | null;
   serviceType: "web" | "worker";
+  startCommand: string | null;
   plainVariables: Array<{ key: string; value: string }>;
 }> {
   if (!deploymentId) {
@@ -197,6 +236,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
       githubToken: null,
       customDomain: null,
       serviceType: "web",
+      startCommand: null,
       plainVariables: [],
     };
   }
@@ -212,6 +252,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
           githubToken: true,
           customDomain: true,
           serviceType: true,
+          startCommand: true,
           env: {
             select: { key: true, value: true, environment: true },
           },
@@ -242,6 +283,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
       githubToken: null,
       customDomain: null,
       serviceType: "web",
+      startCommand: null,
       plainVariables: [],
     };
   }
@@ -253,6 +295,7 @@ export async function variablesForDeployment(deploymentId: string | undefined): 
     githubToken: deployment.project.githubToken,
     customDomain: deployment.project.customDomain,
     serviceType: deployment.project.serviceType === "worker" ? "worker" : "web",
+    startCommand: deployment.project.startCommand,
     plainVariables: mergeGroupAndProjectVariables(
       deployment.project.environmentGroups,
       deployment.project.variables,

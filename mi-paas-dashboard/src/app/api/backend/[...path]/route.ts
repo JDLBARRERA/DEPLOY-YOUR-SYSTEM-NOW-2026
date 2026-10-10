@@ -36,9 +36,14 @@ async function handle(request: Request, context: Ctx): Promise<Response> {
   const isDeployRoute = segments[0] === "deploy";
   const isProjectsRoute = segments[0] === "projects";
   const isEnvironmentGroupsRoute = segments[0] === "environment-groups";
+  const isEcosystemsRoute = segments[0] === "ecosystems";
   const isSettingsRoute = segments[0] === "settings";
   const needsAdminKey =
-    isDeployRoute || isDatabasesRoute || isProjectsRoute || isEnvironmentGroupsRoute;
+    isDeployRoute ||
+    isDatabasesRoute ||
+    isProjectsRoute ||
+    isEnvironmentGroupsRoute ||
+    isEcosystemsRoute;
   const forceLocal =
     isSettingsRoute || (isDatabasesRoute && isSqliteUrl());
 

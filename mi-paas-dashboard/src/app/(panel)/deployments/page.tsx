@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, Fragment } from "react";
 import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { AeroWindow, WinButton, WinField } from "@/components/aero-window";
@@ -56,6 +56,28 @@ function parseEnvExample(text: string): { key: string; value: string }[] {
   return rows;
 }
 
+function deploymentSections(items: Deployment[]): Array<{ title: string; rows: Deployment[] }> {
+  const named = new Map<string, Deployment[]>();
+  const loose: Deployment[] = [];
+  for (const item of items) {
+    const name = item.ecosystemName?.trim();
+    if (!name) {
+      loose.push(item);
+      continue;
+    }
+    const rows = named.get(name) ?? [];
+    rows.push(item);
+    named.set(name, rows);
+  }
+  const sections = [...named.entries()]
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([name, rows]) => ({ title: `Ecosistema: ${name}`, rows }));
+  if (loose.length > 0) {
+    sections.push({ title: "Sin ecosistema", rows: loose });
+  }
+  return sections;
+}
+
 export default function DeploymentsPage() {
   const [items, setItems] = useState<Deployment[] | null>(null);
   const [open, setOpen] = useState(false);
@@ -68,6 +90,7 @@ export default function DeploymentsPage() {
   const [envHint, setEnvHint] = useState("");
   const [detecting, setDetecting] = useState(false);
   const [groups, setGroups] = useState<Array<{ id: string; name: string }>>([]);
+  const [ecosystemNames, setEcosystemNames] = useState<string[]>([]);
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -112,6 +135,8 @@ export default function DeploymentsPage() {
           clearCache,
           serviceType,
           environmentGroupIds: selectedGroupIds,
+          ecosystemName: String(form.get("ecosystemName") ?? "").trim(),
+          startCommand: String(form.get("startCommand") ?? "").trim(),
           variables,
         }),
       });
@@ -146,6 +171,13 @@ export default function DeploymentsPage() {
       })
       .catch(() => {
         if (!cancelled) setGroups([]);
+      });
+    void apiFetch<Array<{ id: string; name: string }>>("/ecosystems")
+      .then((next) => {
+        if (!cancelled) setEcosystemNames(next.map((item) => item.name));
+      })
+      .catch(() => {
+        if (!cancelled) setEcosystemNames([]);
       });
     return () => {
       cancelled = true;
@@ -260,7 +292,14 @@ export default function DeploymentsPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => {
+                {deploymentSections(items).map((section) => (
+                  <Fragment key={section.title}>
+                    <tr className="border-t border-white/50 bg-white/50">
+                      <td colSpan={5} className="px-2.5 py-1.5 text-xs font-semibold text-sky-950">
+                        {section.title}
+                      </td>
+                    </tr>
+                    {section.rows.map((item) => {
                   const busy = redeployingId === item.projectId;
                   return (
                     <tr key={item.projectId} className="border-t border-white/50">
@@ -306,6 +345,8 @@ export default function DeploymentsPage() {
                     </tr>
                   );
                 })}
+                  </Fragment>
+                ))}
               </tbody>
             </table>
           </div>
@@ -345,7 +386,33 @@ export default function DeploymentsPage() {
                 defaultValue="main"
                 placeholder="main"
               />
+              <label className="flex flex-col gap-1 text-sm">
+                Ecosistema
+                <input
+                  name="ecosystemName"
+                  list="ecosystem-names"
+                  placeholder="TrackerMN"
+                  className="rounded-md border border-white/70 bg-white/80 px-2 py-1.5 text-slate-900 shadow-[inset_0_1px_3px_rgba(0,0,0,0.15)] outline-none"
+                />
+                <datalist id="ecosystem-names">
+                  {ecosystemNames.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+              </label>
               <ServiceTypeField value={serviceType} onChange={chooseService} />
+              <label className="flex flex-col gap-1 text-sm">
+                Comando de arranque
+                <input
+                  name="startCommand"
+                  placeholder="python rollup_worker.py"
+                  spellCheck={false}
+                  className="rounded-md border border-white/70 bg-white/80 px-2 py-1.5 font-mono text-sm text-slate-900 shadow-[inset_0_1px_3px_rgba(0,0,0,0.15)] outline-none"
+                />
+                <span className="text-[11px] text-slate-500">
+                  En un worker se usa si el Procfile no tiene línea worker.
+                </span>
+              </label>
               <LinkedGroupsField
                 groups={groups}
                 selected={selectedGroupIds}

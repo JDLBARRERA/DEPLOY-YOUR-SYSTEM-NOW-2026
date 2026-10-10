@@ -96,9 +96,10 @@ function usableCommand(value: string): string | null {
   return command;
 }
 
-function procfileWebCommand(dir: string): string | null {
+function procfileCommand(dir: string, kind: "web" | "worker"): string | null {
+  const pattern = kind === "worker" ? /^worker:\s*(.+)$/ : /^web:\s*(.+)$/;
   for (const line of readRepoText(dir, "Procfile").split(/\r?\n/)) {
-    const match = /^web:\s*(.+)$/.exec(line.trim());
+    const match = pattern.exec(line.trim());
     if (!match) {
       continue;
     }
@@ -122,10 +123,24 @@ function renderStartCommand(dir: string): string | null {
   return usableCommand(command);
 }
 
-function pythonStartCommand(dir: string): { command: string; source: string } | null {
-  const fromProcfile = procfileWebCommand(dir);
-  if (fromProcfile) {
-    return { command: fromProcfile, source: "Procfile" };
+function pythonStartCommand(
+  dir: string,
+  options: { worker: boolean; startCommand?: string | null },
+): { command: string; source: string } | null {
+  if (options.worker) {
+    const fromProcfile = procfileCommand(dir, "worker");
+    if (fromProcfile) {
+      return { command: fromProcfile, source: "Procfile worker:" };
+    }
+    const configured = usableCommand(options.startCommand ?? "");
+    if (configured) {
+      return { command: configured, source: "startCommand del proyecto" };
+    }
+  } else {
+    const fromProcfile = procfileCommand(dir, "web");
+    if (fromProcfile) {
+      return { command: fromProcfile, source: "Procfile" };
+    }
   }
   const fromRender = renderStartCommand(dir);
   if (fromRender) {
@@ -140,7 +155,7 @@ function pythonStartCommand(dir: string): { command: string; source: string } | 
   return null;
 }
 
-function pythonDockerfile(command: string, pipCache: boolean): string {
+function pythonDockerfile(command: string, pipCache: boolean, exposePort: boolean): string {
   const install = pipCache
     ? "RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt"
     : "RUN pip install --no-cache-dir -r requirements.txt";
@@ -151,7 +166,7 @@ function pythonDockerfile(command: string, pipCache: boolean): string {
     "COPY requirements.txt .",
     install,
     "COPY . .",
-    "EXPOSE 8000",
+    ...(exposePort ? ["EXPOSE 8000"] : []),
     `CMD sh -c ${shellSingleQuote(command)}`,
     "",
   ].join("\n");
@@ -228,6 +243,7 @@ const worker = new Worker<DeployJobData>(
         customDomain,
         plainVariables,
         serviceType,
+        startCommand,
       } = await variablesForDeployment(deploymentId);
       const isWorker = serviceType === "worker";
       await store.update(projectId, { serviceType });
@@ -292,17 +308,16 @@ const worker = new Worker<DeployJobData>(
         }
         await note("Usando el Dockerfile del repositorio");
       } else if (repoFile(repoDir, "requirements.txt")) {
-        const start = pythonStartCommand(repoDir);
+        const start = pythonStartCommand(repoDir, { worker: isWorker, startCommand });
         if (!start) {
-          await note(
-            "Falta comando de arranque: Procfile (web:), render.yaml (startCommand), main.py o app.py",
-          );
-          throw new Error(
-            "Falta comando de arranque: Procfile (web:), render.yaml (startCommand), main.py o app.py",
-          );
+          const missing = isWorker
+            ? "Falta comando de arranque: Procfile (worker:), startCommand del proyecto, render.yaml, main.py o app.py"
+            : "Falta comando de arranque: Procfile (web:), render.yaml (startCommand), main.py o app.py";
+          await note(missing);
+          throw new Error(missing);
         }
         pythonRuntime = true;
-        fs.writeFileSync(dockerfilePath, pythonDockerfile(start.command, !clearCache));
+        fs.writeFileSync(dockerfilePath, pythonDockerfile(start.command, !clearCache, !isWorker));
         const ignored = writeGeneratedDockerignore(repoDir);
         await note(
           `Dockerfile generado desde requirements.txt (Python). Comando desde ${start.source}: ${start.command}${ignored ? ". .dockerignore añadido." : ""}`,

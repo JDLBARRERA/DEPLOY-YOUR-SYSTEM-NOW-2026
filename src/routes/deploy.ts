@@ -13,7 +13,7 @@ import {
 } from "../services/DeployEngine.js";
 import type { DeploymentStore } from "../services/DeploymentStore.js";
 import type { LogBus } from "../services/LogBus.js";
-import { normalizeEnvPair, replaceProjectEnvironmentGroups } from "../services/projectEnv.js";
+import { normalizeEnvPair, replaceProjectEnvironmentGroups, assignProjectEcosystem, normalizeStartCommand } from "../services/projectEnv.js";
 
 const deployBodySchema = {
   type: "object",
@@ -27,6 +27,8 @@ const deployBodySchema = {
     commitHash: { type: "string", minLength: 7 },
     clearCache: { type: "boolean" },
     serviceType: { type: "string", enum: ["web", "worker"] },
+    startCommand: { type: "string", maxLength: 500 },
+    ecosystemName: { type: "string", maxLength: 80 },
     environmentGroupIds: {
       type: "array",
       maxItems: 50,
@@ -56,6 +58,8 @@ interface DeployBody {
   commitHash?: string;
   clearCache?: boolean;
   serviceType?: "web" | "worker";
+  startCommand?: string;
+  ecosystemName?: string;
   environmentGroupIds?: string[];
   variables?: Array<{ key: string; value: string }>;
 }
@@ -197,6 +201,10 @@ export async function deployRoutes(
         const image = normalizeImageName(request.body.projectName);
         const variables = parsedVariables(request.body.variables);
         const environmentGroupIds = request.body.environmentGroupIds;
+        const startCommand =
+          request.body.startCommand === undefined
+            ? undefined
+            : normalizeStartCommand(request.body.startCommand);
         const projectId = await projectForDeploy(
           request.body.projectName,
           image,
@@ -204,16 +212,30 @@ export async function deployRoutes(
           branch,
           variables.length > 0 ||
             serviceType === "worker" ||
-            (environmentGroupIds?.length ?? 0) > 0,
+            (environmentGroupIds?.length ?? 0) > 0 ||
+            Boolean(startCommand) ||
+            Boolean(request.body.ecosystemName?.trim()),
           serviceType,
         );
         if (projectId) {
           await prisma.project.update({
             where: { id: projectId },
-            data: { serviceType },
+            data: {
+              serviceType,
+              ...(startCommand !== undefined ? { startCommand } : {}),
+            },
           });
           if (variables.length > 0) {
             await saveProjectVariables(projectId, variables);
+          }
+          if (request.body.ecosystemName !== undefined) {
+            try {
+              await assignProjectEcosystem(projectId, request.body.ecosystemName);
+            } catch (error) {
+              throw new DeployValidationError(
+                error instanceof Error ? error.message : "No se pudo asignar el ecosistema",
+              );
+            }
           }
           if (environmentGroupIds) {
             try {

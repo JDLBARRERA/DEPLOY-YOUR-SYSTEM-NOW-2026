@@ -12,6 +12,7 @@ export interface Deployment {
   commitMessage?: string | null;
   commitAuthor?: string | null;
   serviceType?: "web" | "worker" | null;
+  ecosystemName?: string | null;
   finishedAt?: string | null;
   trigger?: "manual" | "webhook" | null;
 }

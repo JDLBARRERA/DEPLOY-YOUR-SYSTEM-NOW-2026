@@ -89,6 +89,13 @@ model Team {
   createdAt DateTime  @default(now())
 }
 
+model Ecosystem {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  createdAt DateTime  @default(now())
+  projects  Project[]
+}
+
 model Project {
   id          String       @id @default(cuid())
   name        String
@@ -99,6 +106,9 @@ model Project {
   githubToken  String?
   customDomain String?      @unique
   serviceType String       @default("web")
+  startCommand String?
+  ecosystemId  String?
+  ecosystem    Ecosystem?   @relation(fields: [ecosystemId], references: [id], onDelete: SetNull)
   teamId      String
   team        Team         @relation(fields: [teamId], references: [id])
   envVars     Json         @default("{}")

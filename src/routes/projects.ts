@@ -14,6 +14,8 @@ import {
   deleteProjectVariable,
   normalizeEnvPair,
   replaceProjectEnvironmentGroups,
+  assignProjectEcosystem,
+  normalizeStartCommand,
 } from "../services/projectEnv.js";
 import type { DeploymentStore } from "../services/DeploymentStore.js";
 import {
@@ -46,6 +48,8 @@ const updateSchema = {
     githubToken: { type: "string", maxLength: 300 },
     customDomain: { type: "string", maxLength: 253 },
     serviceType: { type: "string", enum: ["web", "worker"] },
+    startCommand: { type: "string", maxLength: 500 },
+    ecosystemName: { type: "string", maxLength: 80 },
     environmentGroupIds: {
       type: "array",
       maxItems: 50,
@@ -64,6 +68,8 @@ const projectSelect = {
   githubToken: true,
   customDomain: true,
   serviceType: true,
+  startCommand: true,
+  ecosystem: { select: { id: true, name: true } },
   environmentGroups: {
     select: {
       group: { select: { id: true, name: true } },
@@ -365,6 +371,8 @@ export async function projectRoutes(
       githubToken?: string;
       customDomain?: string;
       serviceType?: "web" | "worker";
+      startCommand?: string;
+      ecosystemName?: string;
       environmentGroupIds?: string[];
     };
   }>(
@@ -426,6 +434,8 @@ export async function projectRoutes(
         githubToken === undefined &&
         customDomain === undefined &&
         serviceType === undefined &&
+        request.body.startCommand === undefined &&
+        request.body.ecosystemName === undefined &&
         request.body.environmentGroupIds === undefined
       ) {
         return reply.code(400).send({ error: "No hay cambios para guardar" });
@@ -449,6 +459,28 @@ export async function projectRoutes(
           });
         }
       }
+      if (request.body.ecosystemName !== undefined) {
+        try {
+          await assignProjectEcosystem(request.params.id, request.body.ecosystemName);
+        } catch (error) {
+          if (prismaCode(error) === "P2025") {
+            return reply.code(404).send({ error: "Proyecto no encontrado" });
+          }
+          return reply.code(400).send({
+            error: error instanceof Error ? error.message : "No se pudo asignar el ecosistema",
+          });
+        }
+      }
+      let startCommand: string | null | undefined;
+      if (request.body.startCommand !== undefined) {
+        try {
+          startCommand = normalizeStartCommand(request.body.startCommand);
+        } catch (error) {
+          return reply.code(400).send({
+            error: error instanceof Error ? error.message : "El comando de arranque no es válido",
+          });
+        }
+      }
 
       try {
         const updated = await prisma.project.update({
@@ -459,6 +491,7 @@ export async function projectRoutes(
             ...(githubToken !== undefined ? { githubToken: githubToken || null } : {}),
             ...(customDomain !== undefined ? { customDomain } : {}),
             ...(serviceType !== undefined ? { serviceType } : {}),
+            ...(startCommand !== undefined ? { startCommand } : {}),
           },
           select: projectSelect,
         });

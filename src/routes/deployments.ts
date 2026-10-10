@@ -16,6 +16,20 @@ import type { LogBus } from "../services/LogBus.js";
 
 const CONTAINER_PORT = "3000";
 
+async function ecosystemNamesByProject(): Promise<Map<string, string>> {
+  const projects = await prisma.project.findMany({
+    select: { name: true, ecosystem: { select: { name: true } } },
+  });
+  const names = new Map<string, string>();
+  for (const project of projects) {
+    const ecosystem = project.ecosystem?.name?.trim();
+    if (ecosystem) {
+      names.set(project.name.trim(), ecosystem);
+    }
+  }
+  return names;
+}
+
 export interface DeploymentRouteDeps {
   store: DeploymentStore;
   logs: LogBus;
@@ -79,7 +93,19 @@ export async function deploymentRoutes(
           refreshFromDocker(deps.docker, deps.store, record),
         ),
       );
-      return refreshed.map(toResponse);
+      let ecosystems = new Map<string, string>();
+      try {
+        ecosystems = await ecosystemNamesByProject();
+      } catch (error) {
+        request.log.warn(
+          { err: error instanceof Error ? error.message : error },
+          "No se pudieron leer los ecosistemas",
+        );
+      }
+      return refreshed.map((record) => ({
+        ...toResponse(record),
+        ecosystemName: ecosystems.get(record.projectName.trim()) ?? null,
+      }));
     } catch (error) {
       request.log.warn(
         {

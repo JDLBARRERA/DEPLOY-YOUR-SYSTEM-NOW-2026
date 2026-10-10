@@ -22,6 +22,9 @@ export interface ProjectLimits {
   serviceType: ServiceType;
   environmentGroupIds: string[];
   environmentGroups?: Array<{ id: string; name: string }>;
+  startCommand: string;
+  ecosystemName: string;
+  ecosystem?: { id: string; name: string } | null;
 }
 
 const MEMORY_OPTIONS = ["256m", "512m", "1g", "2g"];
@@ -46,6 +49,8 @@ export function ProjectLimitsCard() {
               customDomain: project.customDomain ?? "",
               serviceType: serviceTypeOf(project.serviceType),
               environmentGroupIds: (project.environmentGroups ?? []).map((group) => group.id),
+              startCommand: project.startCommand ?? "",
+              ecosystemName: project.ecosystem?.name ?? "",
             })),
           );
         }
@@ -88,6 +93,8 @@ export function ProjectLimitsCard() {
         | "customDomain"
         | "serviceType"
         | "environmentGroupIds"
+        | "startCommand"
+        | "ecosystemName"
       >
     >,
   ) {
@@ -142,6 +149,8 @@ export function ProjectLimitsCard() {
           customDomain: project.customDomain.trim(),
           serviceType: project.serviceType,
           environmentGroupIds: project.environmentGroupIds,
+          startCommand: project.startCommand.trim(),
+          ecosystemName: project.ecosystemName.trim(),
           ...(project.githubToken.trim() ? { githubToken: project.githubToken.trim() } : {}),
         }),
       });
@@ -153,6 +162,8 @@ export function ProjectLimitsCard() {
         environmentGroupIds: saved.environmentGroups
           ? saved.environmentGroups.map((group) => group.id)
           : project.environmentGroupIds,
+        startCommand: saved.startCommand ?? "",
+        ecosystemName: saved.ecosystem?.name ?? "",
       });
       toast.success(`Configuración de ${project.name} guardada`);
     } catch (error) {
@@ -236,6 +247,28 @@ export function ProjectLimitsCard() {
                 selected={project.environmentGroupIds}
                 onChange={(environmentGroupIds) => update(project.id, { environmentGroupIds })}
               />
+              <label className="flex flex-col gap-1 text-xs">
+                Ecosistema
+                <input
+                  value={project.ecosystemName}
+                  placeholder="TrackerMN"
+                  onChange={(event) => update(project.id, { ecosystemName: event.target.value })}
+                  className="rounded-md border border-white/70 bg-white/80 px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-xs">
+                Comando de arranque
+                <input
+                  value={project.startCommand}
+                  placeholder="python rollup_worker.py"
+                  spellCheck={false}
+                  onChange={(event) => update(project.id, { startCommand: event.target.value })}
+                  className="rounded-md border border-white/70 bg-white/80 px-2 py-1.5 font-mono text-sm text-slate-900"
+                />
+                <span className="text-[11px] text-slate-500">
+                  En un worker se usa si el Procfile no tiene línea worker.
+                </span>
+              </label>
               <label className="flex flex-col gap-1 text-xs">
                 Dominio personalizado
                 <input
