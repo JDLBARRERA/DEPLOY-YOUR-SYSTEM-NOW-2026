@@ -72,17 +72,84 @@ EXPOSE 8000
 CMD ["npm", "start"]
 `;
 
-const PYTHON_DOCKERFILE = `FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-EXPOSE 8000
-CMD sh -c 'if [ -n "\$START_COMMAND" ]; then exec sh -c "\$START_COMMAND"; elif [ -f main.py ]; then exec python main.py; elif [ -f app.py ]; then exec python app.py; else exec uvicorn main:app --host 0.0.0.0 --port 8000; fi'
-`;
-
 function repoFile(dir: string, name: string): boolean {
   return fs.existsSync(path.join(dir, name));
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function readRepoText(dir: string, name: string): string {
+  if (!repoFile(dir, name)) {
+    return "";
+  }
+  return fs.readFileSync(path.join(dir, name), "utf8");
+}
+
+function usableCommand(value: string): string | null {
+  const command = value.trim();
+  if (!command || command.length > 500 || /[\r\n]/.test(command)) {
+    return null;
+  }
+  return command;
+}
+
+function procfileWebCommand(dir: string): string | null {
+  for (const line of readRepoText(dir, "Procfile").split(/\r?\n/)) {
+    const match = /^web:\s*(.+)$/.exec(line.trim());
+    if (!match) {
+      continue;
+    }
+    return usableCommand(match[1]);
+  }
+  return null;
+}
+
+function renderStartCommand(dir: string): string | null {
+  const match = /^\s*startCommand:\s*(.+)$/m.exec(readRepoText(dir, "render.yaml"));
+  if (!match) {
+    return null;
+  }
+  let command = match[1].trim();
+  if (
+    (command.startsWith('"') && command.endsWith('"')) ||
+    (command.startsWith("'") && command.endsWith("'"))
+  ) {
+    command = command.slice(1, -1);
+  }
+  return usableCommand(command);
+}
+
+function pythonStartCommand(dir: string): { command: string; source: string } | null {
+  const fromProcfile = procfileWebCommand(dir);
+  if (fromProcfile) {
+    return { command: fromProcfile, source: "Procfile" };
+  }
+  const fromRender = renderStartCommand(dir);
+  if (fromRender) {
+    return { command: fromRender, source: "render.yaml" };
+  }
+  if (repoFile(dir, "main.py")) {
+    return { command: "python main.py", source: "main.py" };
+  }
+  if (repoFile(dir, "app.py")) {
+    return { command: "python app.py", source: "app.py" };
+  }
+  return null;
+}
+
+function pythonDockerfile(command: string): string {
+  return [
+    "FROM python:3.11-slim",
+    "WORKDIR /app",
+    "COPY requirements.txt .",
+    "RUN pip install --no-cache-dir -r requirements.txt",
+    "COPY . .",
+    "EXPOSE 8000",
+    `CMD sh -c ${shellSingleQuote(command)}`,
+    "",
+  ].join("\n");
 }
 
 const GENERATED_DOCKERIGNORE = [
@@ -182,12 +249,19 @@ const worker = new Worker<DeployJobData>(
         }
         await note("Usando el Dockerfile del repositorio");
       } else if (repoFile(repoDir, "requirements.txt")) {
-        fs.writeFileSync(dockerfilePath, PYTHON_DOCKERFILE);
+        const start = pythonStartCommand(repoDir);
+        if (!start) {
+          await note(
+            "Falta comando de arranque: Procfile (web:), render.yaml (startCommand), main.py o app.py",
+          );
+          throw new Error(
+            "Falta comando de arranque: Procfile (web:), render.yaml (startCommand), main.py o app.py",
+          );
+        }
+        fs.writeFileSync(dockerfilePath, pythonDockerfile(start.command));
         const ignored = writeGeneratedDockerignore(repoDir);
         await note(
-          ignored
-            ? "Dockerfile generado desde requirements.txt (Python). .dockerignore añadido."
-            : "Dockerfile generado desde requirements.txt (Python)",
+          `Dockerfile generado desde requirements.txt (Python). Comando desde ${start.source}: ${start.command}${ignored ? ". .dockerignore añadido." : ""}`,
         );
       } else if (repoFile(repoDir, "package.json")) {
         fs.writeFileSync(dockerfilePath, DEFAULT_DOCKERFILE);
@@ -464,20 +538,30 @@ async function retirePreviousDeploys(
   await caddy.ensureCatchAll();
 }
 
-function listPreviousContainers(appName: string, currentProjectId: string): string[] {
-  let listed = "";
+function listedContainerNames(status: string): string[] {
   try {
-    listed = execSync(`docker ps --filter status=running --format "{{.Names}}"`, {
+    return execSync(`docker ps --filter status=${status} --format "{{.Names}}"`, {
       stdio: "pipe",
       encoding: "utf8",
-    });
+    })
+      .split(/\s+/)
+      .filter(Boolean);
   } catch {
     return [];
   }
+}
+
+function listPreviousContainers(appName: string, currentProjectId: string): string[] {
+  const listed = [
+    ...new Set([
+      ...listedContainerNames("running"),
+      ...listedContainerNames("restarting"),
+    ]),
+  ];
 
   const currentName = `paas-${currentProjectId}`;
   const names: string[] = [];
-  for (const name of listed.split(/\s+/).filter(Boolean)) {
+  for (const name of listed) {
     if (name === currentName || !APP_CONTAINER_NAME.test(name)) {
       continue;
     }
@@ -585,25 +669,27 @@ function readDockerLogs(containerId: string): string {
   }
 }
 
-function containerRunning(containerId: string): { running: boolean; status: string } {
+function containerState(containerId: string): {
+  running: boolean;
+  status: string;
+  restartCount: number;
+  oomKilled: boolean;
+} {
   try {
-    const runningRaw = execSync(
-      `docker inspect --format='{{.State.Running}}' "${containerId}"`,
+    const raw = execSync(
+      `docker inspect --format='{{.State.Running}}|{{.State.Status}}|{{.RestartCount}}|{{.State.OOMKilled}}' "${containerId}"`,
       { stdio: "pipe", encoding: "utf8" },
     ).trim();
-    const running = runningRaw === "true";
-    let status = running ? "running" : "exited";
-    try {
-      status = execSync(
-        `docker inspect --format='{{.State.Status}}' "${containerId}"`,
-        { stdio: "pipe", encoding: "utf8" },
-      ).trim();
-    } catch {
-      // Mantener status derivado de Running.
-    }
-    return { running, status };
+    const [runningRaw = "false", status = "missing", restarts = "0", oom = "false"] =
+      raw.split("|");
+    return {
+      running: runningRaw === "true",
+      status,
+      restartCount: Number(restarts) || 0,
+      oomKilled: oom === "true",
+    };
   } catch {
-    return { running: false, status: "missing" };
+    return { running: false, status: "missing", restartCount: 0, oomKilled: false };
   }
 }
 
@@ -613,45 +699,60 @@ async function checkContainerHealth(
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   let attempt = 0;
-  let lastStatus = "starting";
+  let last = containerState(containerId);
 
   while (Date.now() <= deadline) {
     attempt += 1;
-    const state = containerRunning(containerId);
-    lastStatus = state.status;
-
-    if (state.running) {
-      if (note) {
-        await note(
-          `Health check OK en intento ${attempt}: Running=true (estado "${state.status}").`,
-        );
-      }
-      return { ok: true };
+    last = containerState(containerId);
+    const failed = healthFailure(last);
+    if (failed) {
+      return { ok: false, reason: failed };
     }
-
-    if (state.status === "exited" || state.status === "dead" || state.status === "missing") {
-      return {
-        ok: false,
-        reason: `Health check falló: el contenedor pasó a estado "${state.status}" (Running=false).`,
-      };
-    }
-
     if (note) {
       await note(
-        `Health check intento ${attempt}: Running=false (estado "${state.status}"); reintentando...`,
+        `Health check intento ${attempt}: Running=${last.running} (estado "${last.status}", RestartCount=${last.restartCount}).`,
       );
     }
-
     if (Date.now() + HEALTH_INTERVAL_MS > deadline) {
       break;
     }
     await sleep(HEALTH_INTERVAL_MS);
   }
 
+  last = containerState(containerId);
+  const failed = healthFailure(last);
+  if (failed) {
+    return { ok: false, reason: failed };
+  }
+  if (last.running && last.status === "running" && last.restartCount === 0) {
+    if (note) {
+      await note(
+        `Health check OK: sigue running tras ${HEALTH_TIMEOUT_MS / 1000}s, sin reinicios.`,
+      );
+    }
+    return { ok: true };
+  }
   return {
     ok: false,
-    reason: `Health check falló tras ${HEALTH_TIMEOUT_MS / 1000}s: Running=false (último estado "${lastStatus}").`,
+    reason: `Health check falló tras ${HEALTH_TIMEOUT_MS / 1000}s: estado "${last.status}", RestartCount=${last.restartCount}, OOMKilled=${last.oomKilled}.`,
   };
+}
+
+function healthFailure(state: {
+  status: string;
+  restartCount: number;
+  oomKilled: boolean;
+}): string | null {
+  if (state.oomKilled) {
+    return `Health check falló: OOMKilled (estado "${state.status}").`;
+  }
+  if (state.restartCount > 0 || state.status === "restarting") {
+    return `Health check falló: el contenedor reinició (estado "${state.status}", RestartCount=${state.restartCount}).`;
+  }
+  if (state.status === "exited" || state.status === "dead" || state.status === "missing") {
+    return `Health check falló: el contenedor pasó a estado "${state.status}" (Running=false).`;
+  }
+  return null;
 }
 
 function commandError(error: unknown): string {
